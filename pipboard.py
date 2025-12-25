@@ -33,6 +33,39 @@ import tempfile
 import webbrowser
 
 GITHUB_REPO = "BabyTank-Projects/MultiClientViewer"
+VERSION_FILE = "version.txt"
+
+def get_current_version():
+    """Get current version from version.txt file"""
+    try:
+        if os.path.exists(VERSION_FILE):
+            with open(VERSION_FILE, 'r') as f:
+                return f.read().strip()
+        return None
+    except:
+        return None
+
+def save_current_version(version):
+    """Save version to version.txt file"""
+    try:
+        with open(VERSION_FILE, 'w') as f:
+            f.write(version)
+    except:
+        pass
+
+def compare_versions(current, latest):
+    """Compare version strings (e.g., '1.0.6' vs '1.0.7')"""
+    try:
+        # Remove 'v' prefix if present
+        current = current.lstrip('v') if current else "0.0.0"
+        latest = latest.lstrip('v') if latest else "0.0.0"
+        
+        current_parts = [int(x) for x in current.split('.')]
+        latest_parts = [int(x) for x in latest.split('.')]
+        
+        return latest_parts > current_parts
+    except:
+        return True  # If comparison fails, assume update is available
 
 def get_latest_release():
     """Fetch the latest release info from GitHub"""
@@ -63,6 +96,16 @@ def check_for_updates(show_no_update_message=False):
             messagebox.showinfo("Update Check", "No version information available.")
         return
     
+    # Get current version
+    current_version = get_current_version()
+    
+    # Compare versions
+    if current_version and not compare_versions(current_version, latest_version):
+        # Already on latest version
+        if show_no_update_message:
+            messagebox.showinfo("No Update", f"You're already on the latest version ({current_version})!")
+        return
+    
     # Show update available message
     result = messagebox.askyesno(
         "Update Available",
@@ -73,6 +116,8 @@ def check_for_updates(show_no_update_message=False):
     
     if result:
         webbrowser.open(release_url)
+        # Save the latest version so we don't prompt again
+        save_current_version(latest_version)
 
 def check_updates_on_startup():
     """Check for updates in background thread on startup"""
