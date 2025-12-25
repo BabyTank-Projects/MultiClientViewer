@@ -1,10 +1,8 @@
 name: Build Multi-Client Viewer
-
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
-
 jobs:
   build:
     runs-on: windows-latest
@@ -24,7 +22,7 @@ jobs:
     
     - name: Build executable
       run: |
-        pyinstaller --onefile --windowed --name="MultiClientViewer" --icon=icon.ico pipboard.py
+        pyinstaller --onefile --windowed --name="MultiClientViewer" pipboard.py
     
     - name: Upload executable
       uses: actions/upload-artifact@v4
