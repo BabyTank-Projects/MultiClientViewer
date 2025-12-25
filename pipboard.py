@@ -30,6 +30,8 @@ import os
 import subprocess
 import tempfile
 
+import webbrowser
+
 # Your current app version - UPDATE THIS WITH EACH RELEASE
 CURRENT_VERSION = "1.0.12"
 GITHUB_REPO = "BabyTank-Projects/MultiClientViewer"
@@ -54,134 +56,6 @@ def compare_versions(current, latest):
         return latest_parts > current_parts
     except:
         return False
-
-def download_update(download_url, filename):
-    """Download the new version"""
-    try:
-        response = requests.get(download_url, stream=True, timeout=30)
-        if response.status_code == 200:
-            temp_dir = tempfile.gettempdir()
-            temp_path = os.path.join(temp_dir, filename)
-            
-            with open(temp_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            return temp_path
-        return None
-    except Exception as e:
-        print(f"Error downloading update: {e}")
-        return None
-
-def apply_update(new_exe_path):
-    """Replace current executable with new version"""
-    try:
-        # If running as a script (not frozen), just notify
-        if not getattr(sys, 'frozen', False):
-            messagebox.showinfo("Development Mode", 
-                "Running in development mode. Please download the latest release from GitHub manually.")
-            return False
-        
-        current_exe = sys.executable
-        backup_exe = current_exe + ".old"
-        
-        # Create a more robust batch script
-        batch_script = f"""@echo off
-echo Updating Multi-Client Viewer...
-timeout /t 3 /nobreak > nul
-
-:RETRY
-del "{backup_exe}" 2>nul
-move /Y "{current_exe}" "{backup_exe}"
-if errorlevel 1 (
-    timeout /t 1 /nobreak > nul
-    goto RETRY
-)
-
-move /Y "{new_exe_path}" "{current_exe}"
-if errorlevel 1 (
-    echo Update failed! Restoring backup...
-    move /Y "{backup_exe}" "{current_exe}"
-    pause
-    exit
-)
-
-echo Update successful! Restarting...
-timeout /t 1 /nobreak > nul
-start "" "{current_exe}"
-
-rem Clean up backup after successful start
-timeout /t 2 /nobreak > nul
-del "{backup_exe}" 2>nul
-del "%~f0"
-"""
-        batch_path = os.path.join(tempfile.gettempdir(), "multiclient_update.bat")
-        with open(batch_path, 'w') as f:
-            f.write(batch_script)
-        
-        # Show a message before closing
-        messagebox.showinfo("Updating", 
-            "The application will now close and update.\n\n"
-            "It will restart automatically in a few seconds.")
-        
-        # Run the batch script and exit immediately
-        subprocess.Popen(['cmd', '/c', batch_path], 
-                        creationflags=subprocess.CREATE_NO_WINDOW)
-        
-        # Give the subprocess a moment to start
-        time.sleep(0.5)
-        sys.exit(0)
-        
-    except Exception as e:
-        messagebox.showerror("Update Error", f"Failed to apply update: {e}")
-        return False
-
-def check_for_updates(show_no_update_message=False):
-    """Check for updates and prompt user"""
-    release_info = get_latest_release()
-    
-    if not release_info:
-        if show_no_update_message:
-            messagebox.showinfo("Update Check", "Unable to check for updates.")
-        return
-    
-    latest_version = release_info.get('tag_name', '')
-    
-    if compare_versions(CURRENT_VERSION, latest_version):
-        # New version available
-        response = messagebox.askyesno(
-            "Update Available",
-            f"A new version is available!\n\n"
-            f"Current version: v{CURRENT_VERSION}\n"
-            f"Latest version: {latest_version}\n\n"
-            f"Would you like to download and install it now?"
-        )
-        
-        if response:
-            # Find the .exe asset in the release
-            assets = release_info.get('assets', [])
-            exe_asset = None
-            for asset in assets:
-                if asset['name'].endswith('.exe'):
-                    exe_asset = asset
-                    break
-            
-            if exe_asset:
-                messagebox.showinfo("Downloading", "Downloading update... Please wait.")
-                download_url = exe_asset['browser_download_url']
-                filename = exe_asset['name']
-                
-                new_exe_path = download_update(download_url, filename)
-                
-                if new_exe_path:
-                    messagebox.showinfo("Update Ready", "Update downloaded! The application will restart now.")
-                    apply_update(new_exe_path)
-                else:
-                    messagebox.showerror("Update Failed", "Failed to download update.")
-            else:
-                messagebox.showerror("Update Error", "Could not find executable in release.")
-    else:
-        if show_no_update_message:
-            messagebox.showinfo("No Updates", f"You are running the latest version (v{CURRENT_VERSION}).")
 
 def check_updates_on_startup():
     """Check for updates in background thread on startup"""
