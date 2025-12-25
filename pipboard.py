@@ -31,7 +31,7 @@ import subprocess
 import tempfile
 
 # Your current app version - UPDATE THIS WITH EACH RELEASE
-CURRENT_VERSION = "1.0.8"
+CURRENT_VERSION = "1.0.12"
 GITHUB_REPO = "BabyTank-Projects/MultiClientViewer"
 
 def get_latest_release():
@@ -75,25 +75,62 @@ def download_update(download_url, filename):
 def apply_update(new_exe_path):
     """Replace current executable with new version"""
     try:
+        # If running as a script (not frozen), just notify
+        if not getattr(sys, 'frozen', False):
+            messagebox.showinfo("Development Mode", 
+                "Running in development mode. Please download the latest release from GitHub manually.")
+            return False
+        
         current_exe = sys.executable
         backup_exe = current_exe + ".old"
         
-        # Create a batch script to replace the executable after this process exits
+        # Create a more robust batch script
         batch_script = f"""@echo off
+echo Updating Multi-Client Viewer...
+timeout /t 3 /nobreak > nul
+
+:RETRY
+del "{backup_exe}" 2>nul
+move /Y "{current_exe}" "{backup_exe}"
+if errorlevel 1 (
+    timeout /t 1 /nobreak > nul
+    goto RETRY
+)
+
+move /Y "{new_exe_path}" "{current_exe}"
+if errorlevel 1 (
+    echo Update failed! Restoring backup...
+    move /Y "{backup_exe}" "{current_exe}"
+    pause
+    exit
+)
+
+echo Update successful! Restarting...
+timeout /t 1 /nobreak > nul
+start "" "{current_exe}"
+
+rem Clean up backup after successful start
 timeout /t 2 /nobreak > nul
 del "{backup_exe}" 2>nul
-move "{current_exe}" "{backup_exe}"
-move "{new_exe_path}" "{current_exe}"
-start "" "{current_exe}"
 del "%~f0"
 """
-        batch_path = os.path.join(tempfile.gettempdir(), "update.bat")
+        batch_path = os.path.join(tempfile.gettempdir(), "multiclient_update.bat")
         with open(batch_path, 'w') as f:
             f.write(batch_script)
         
-        # Run the batch script and exit
-        subprocess.Popen(batch_path, shell=True)
+        # Show a message before closing
+        messagebox.showinfo("Updating", 
+            "The application will now close and update.\n\n"
+            "It will restart automatically in a few seconds.")
+        
+        # Run the batch script and exit immediately
+        subprocess.Popen(['cmd', '/c', batch_path], 
+                        creationflags=subprocess.CREATE_NO_WINDOW)
+        
+        # Give the subprocess a moment to start
+        time.sleep(0.5)
         sys.exit(0)
+        
     except Exception as e:
         messagebox.showerror("Update Error", f"Failed to apply update: {e}")
         return False
