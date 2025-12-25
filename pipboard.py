@@ -1,4 +1,4 @@
-﻿"""
+"""
 Multi-Client Viewer - Modern Multi-Client Picture-in-Picture Viewer
 Features:
 - Modern UI with rounded corners and smooth animations
@@ -9,6 +9,7 @@ Features:
 - Client status indicators (Green=Minimized/Low CPU, Red=Active/High CPU)
 - Thread-safe with proper locking mechanisms
 - No admin rights required
+- Auto-update functionality
 """
 
 import tkinter as tk
@@ -23,6 +24,135 @@ import threading
 import logging
 import sys
 from logging.handlers import RotatingFileHandler
+import requests
+import json
+import os
+import subprocess
+import tempfile
+
+# Your current app version - UPDATE THIS WITH EACH RELEASE
+CURRENT_VERSION = "1.0.8"
+GITHUB_REPO = "BabyTank-Projects/MultiClientViewer"
+
+def get_latest_release():
+    """Fetch the latest release info from GitHub"""
+    try:
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
+            return response.json()
+        return None
+    except Exception as e:
+        print(f"Error checking for updates: {e}")
+        return None
+
+def compare_versions(current, latest):
+    """Compare version strings (e.g., '1.0.6' vs '1.0.7')"""
+    try:
+        current_parts = [int(x) for x in current.lstrip('v').split('.')]
+        latest_parts = [int(x) for x in latest.lstrip('v').split('.')]
+        return latest_parts > current_parts
+    except:
+        return False
+
+def download_update(download_url, filename):
+    """Download the new version"""
+    try:
+        response = requests.get(download_url, stream=True, timeout=30)
+        if response.status_code == 200:
+            temp_dir = tempfile.gettempdir()
+            temp_path = os.path.join(temp_dir, filename)
+            
+            with open(temp_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            return temp_path
+        return None
+    except Exception as e:
+        print(f"Error downloading update: {e}")
+        return None
+
+def apply_update(new_exe_path):
+    """Replace current executable with new version"""
+    try:
+        current_exe = sys.executable
+        backup_exe = current_exe + ".old"
+        
+        # Create a batch script to replace the executable after this process exits
+        batch_script = f"""@echo off
+timeout /t 2 /nobreak > nul
+del "{backup_exe}" 2>nul
+move "{current_exe}" "{backup_exe}"
+move "{new_exe_path}" "{current_exe}"
+start "" "{current_exe}"
+del "%~f0"
+"""
+        batch_path = os.path.join(tempfile.gettempdir(), "update.bat")
+        with open(batch_path, 'w') as f:
+            f.write(batch_script)
+        
+        # Run the batch script and exit
+        subprocess.Popen(batch_path, shell=True)
+        sys.exit(0)
+    except Exception as e:
+        messagebox.showerror("Update Error", f"Failed to apply update: {e}")
+        return False
+
+def check_for_updates(show_no_update_message=False):
+    """Check for updates and prompt user"""
+    release_info = get_latest_release()
+    
+    if not release_info:
+        if show_no_update_message:
+            messagebox.showinfo("Update Check", "Unable to check for updates.")
+        return
+    
+    latest_version = release_info.get('tag_name', '')
+    
+    if compare_versions(CURRENT_VERSION, latest_version):
+        # New version available
+        response = messagebox.askyesno(
+            "Update Available",
+            f"A new version is available!\n\n"
+            f"Current version: v{CURRENT_VERSION}\n"
+            f"Latest version: {latest_version}\n\n"
+            f"Would you like to download and install it now?"
+        )
+        
+        if response:
+            # Find the .exe asset in the release
+            assets = release_info.get('assets', [])
+            exe_asset = None
+            for asset in assets:
+                if asset['name'].endswith('.exe'):
+                    exe_asset = asset
+                    break
+            
+            if exe_asset:
+                messagebox.showinfo("Downloading", "Downloading update... Please wait.")
+                download_url = exe_asset['browser_download_url']
+                filename = exe_asset['name']
+                
+                new_exe_path = download_update(download_url, filename)
+                
+                if new_exe_path:
+                    messagebox.showinfo("Update Ready", "Update downloaded! The application will restart now.")
+                    apply_update(new_exe_path)
+                else:
+                    messagebox.showerror("Update Failed", "Failed to download update.")
+            else:
+                messagebox.showerror("Update Error", "Could not find executable in release.")
+    else:
+        if show_no_update_message:
+            messagebox.showinfo("No Updates", f"You are running the latest version (v{CURRENT_VERSION}).")
+
+def check_updates_on_startup():
+    """Check for updates in background thread on startup"""
+    def bg_check():
+        check_for_updates(show_no_update_message=False)
+    
+    thread = threading.Thread(target=bg_check, daemon=True)
+    thread.start()
 
 def setup_logging():
     """Setup logging with fallback if file is locked"""
@@ -211,7 +341,7 @@ class ModernToggle(tk.Frame):
 class PiPBoard:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("Multi-Client Viewer")
+        self.root.title(f"Multi-Client Viewer v{CURRENT_VERSION}")
         self.root.geometry("2000x1080")
         
         self.dark_mode = True
@@ -245,6 +375,9 @@ class PiPBoard:
         self.status_monitor_thread = threading.Thread(target=self.monitor_window_states, daemon=True)
         self.status_monitor_thread.start()
         
+        # Check for updates on startup
+        check_updates_on_startup()
+        
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
     def setup_modern_ui(self):
@@ -268,6 +401,10 @@ class PiPBoard:
         
         add_btn = ModernButton(controls, "＋ Add Window", self.add_window, width=150)
         add_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Update button
+        update_btn = ModernButton(controls, "🔄 Check Updates", lambda: check_for_updates(show_no_update_message=True), bg="#666666", hover_bg="#555555", width=150)
+        update_btn.pack(side=tk.LEFT, padx=5)
         
         # Help button
         help_btn = ModernButton(controls, "❓ Help", self.show_help, bg="#666666", hover_bg="#555555", width=100)
@@ -507,6 +644,9 @@ class PiPBoard:
             
             ("✕ Remove", 
              "Click the 'Remove' button to stop monitoring a window and remove it from the grid."),
+            
+            ("🔄 Auto-Update", 
+             "The app automatically checks for updates on startup. Click '🔄 Check Updates' to manually check for new versions."),
             
             ("💡 Tips", 
              "• Minimize windows when not actively using them to reduce CPU usage\n• Use Movie Mode when monitoring many windows\n• The app works best with 5 windows per row\n• No admin rights required!")
@@ -965,7 +1105,7 @@ class PiPBoard:
         self.root.destroy()
     
     def run(self):
-        logging.info("Starting Multi-Client Viewer")
+        logging.info(f"Starting Multi-Client Viewer v{CURRENT_VERSION}")
         self.root.mainloop()
 
 if __name__ == "__main__":
