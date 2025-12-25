@@ -47,7 +47,7 @@ def get_latest_release():
         return None
 
 def check_for_updates(show_no_update_message=False):
-    """Check for updates and download if available"""
+    """Check for updates and show link to GitHub release"""
     release_info = get_latest_release()
     
     if not release_info:
@@ -56,114 +56,23 @@ def check_for_updates(show_no_update_message=False):
         return
     
     latest_version = release_info.get('tag_name', '').lstrip('v')
+    release_url = release_info.get('html_url', f"https://github.com/{GITHUB_REPO}/releases/latest")
     
     if not latest_version:
         if show_no_update_message:
             messagebox.showinfo("Update Check", "No version information available.")
         return
     
-    # Get download URL for the .exe file
-    download_url = None
-    for asset in release_info.get('assets', []):
-        if asset['name'].endswith('.exe'):
-            download_url = asset['browser_download_url']
-            break
-    
-    if not download_url:
-        if show_no_update_message:
-            messagebox.showinfo("Update Check", "No executable found in the latest release.")
-        return
-    
-    # Always show update available (since we removed version comparison)
+    # Show update available message
     result = messagebox.askyesno(
         "Update Available",
         f"A new version ({latest_version}) is available!\n\n"
-        "Would you like to download and install it now?\n\n"
-        "The application will close and restart automatically.",
+        "Would you like to visit the GitHub release page to download it?",
         icon='info'
     )
     
     if result:
-        download_and_install_update(download_url)
-
-def download_and_install_update(download_url):
-    """Download and install the update"""
-    try:
-        # Show progress dialog
-        progress_window = tk.Toplevel()
-        progress_window.title("Downloading Update")
-        progress_window.geometry("400x150")
-        progress_window.transient()
-        progress_window.grab_set()
-        
-        tk.Label(
-            progress_window,
-            text="Downloading update...",
-            font=("Segoe UI", 12)
-        ).pack(pady=20)
-        
-        progress_bar = ttk.Progressbar(
-            progress_window,
-            length=350,
-            mode='indeterminate'
-        )
-        progress_bar.pack(pady=10)
-        progress_bar.start()
-        
-        status_label = tk.Label(progress_window, text="Please wait...")
-        status_label.pack(pady=10)
-        
-        def download():
-            try:
-                # Download the new version
-                response = requests.get(download_url, stream=True, timeout=30)
-                response.raise_for_status()
-                
-                # Get current executable path
-                current_exe = sys.executable if getattr(sys, 'frozen', False) else __file__
-                exe_dir = os.path.dirname(os.path.abspath(current_exe))
-                exe_name = os.path.basename(current_exe)
-                
-                # Save to temp file first
-                temp_exe = os.path.join(tempfile.gettempdir(), 'multiclientviewer_update.exe')
-                
-                with open(temp_exe, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                
-                progress_window.destroy()
-                
-                # Create a batch script to replace the old exe and restart
-                batch_script = f'''@echo off
-timeout /t 2 /nobreak > nul
-del /f /q "{current_exe}.old" 2>nul
-move /y "{current_exe}" "{current_exe}.old"
-move /y "{temp_exe}" "{current_exe}"
-del /f /q "{current_exe}.old" 2>nul
-start "" "{current_exe}"
-del "%~f0"
-'''
-                
-                batch_file = os.path.join(tempfile.gettempdir(), 'update_multiclientviewer.bat')
-                with open(batch_file, 'w') as f:
-                    f.write(batch_script)
-                
-                # Start the batch script and exit
-                subprocess.Popen(batch_file, shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
-                
-                # Close the application
-                os._exit(0)
-                
-            except Exception as e:
-                progress_window.destroy()
-                messagebox.showerror("Update Failed", f"Failed to install update: {str(e)}")
-        
-        # Run download in separate thread
-        thread = threading.Thread(target=download, daemon=True)
-        thread.start()
-        
-    except Exception as e:
-        messagebox.showerror("Update Error", f"Failed to download update: {str(e)}")
+        webbrowser.open(release_url)
 
 def check_updates_on_startup():
     """Check for updates in background thread on startup"""
