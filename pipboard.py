@@ -122,6 +122,15 @@ def check_for_updates(show_no_update_message=False):
 def check_updates_on_startup():
     """Check for updates in background thread on startup"""
     def bg_check():
+        # First time setup - if no version file exists, create it with the latest version
+        if not get_current_version():
+            release_info = get_latest_release()
+            if release_info:
+                latest_version = release_info.get('tag_name', '').lstrip('v')
+                if latest_version:
+                    save_current_version(latest_version)
+                    return  # Don't show update prompt on first launch
+        
         check_for_updates(show_no_update_message=False)
     
     thread = threading.Thread(target=bg_check, daemon=True)
@@ -356,7 +365,28 @@ class PiPBoard:
     def setup_modern_ui(self):
         self.root.configure(bg=self.bg_dark)
         
-        header = tk.Frame(self.root, bg=self.bg_dark, height=80)
+        # Create notebook (tab container)
+        style = ttk.Style()
+        style.theme_use('default')
+        style.configure('TNotebook', background=self.bg_dark, borderwidth=0)
+        style.configure('TNotebook.Tab', background=self.card_bg_dark, foreground='white', 
+                       padding=[20, 10], font=('Segoe UI', 10, 'bold'))
+        style.map('TNotebook.Tab', background=[('selected', self.accent_color)], 
+                 foreground=[('selected', 'white')])
+        
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill=tk.BOTH, expand=True)
+        
+        # Main tab (clients view)
+        main_tab = tk.Frame(self.notebook, bg=self.bg_dark)
+        self.notebook.add(main_tab, text='  Clients  ')
+        
+        # Settings tab
+        settings_tab = tk.Frame(self.notebook, bg=self.bg_dark)
+        self.notebook.add(settings_tab, text='  Settings  ')
+        
+        # === MAIN TAB CONTENT ===
+        header = tk.Frame(main_tab, bg=self.bg_dark, height=80)
         header.pack(side=tk.TOP, fill=tk.X)
         header.pack_propagate(False)
         
@@ -374,14 +404,6 @@ class PiPBoard:
         
         add_btn = ModernButton(controls, "＋ Add Window", self.add_window, width=150)
         add_btn.pack(side=tk.LEFT, padx=5)
-        
-        # Update button
-        update_btn = ModernButton(controls, "🔄 Check Updates", lambda: check_for_updates(show_no_update_message=True), bg="#666666", hover_bg="#555555", width=150)
-        update_btn.pack(side=tk.LEFT, padx=5)
-        
-        # Help button
-        help_btn = ModernButton(controls, "❓ Help", self.show_help, bg="#666666", hover_bg="#555555", width=100)
-        help_btn.pack(side=tk.LEFT, padx=5)
         
         # Movie Mode toggle
         self.movie_mode_var = tk.BooleanVar(value=False)
@@ -409,7 +431,7 @@ class PiPBoard:
         )
         self.status_label.pack(side=tk.LEFT)
         
-        content = tk.Frame(self.root, bg=self.bg_dark)
+        content = tk.Frame(main_tab, bg=self.bg_dark)
         content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
         
         self.canvas = tk.Canvas(content, bg=self.bg_dark, highlightthickness=0)
@@ -427,6 +449,166 @@ class PiPBoard:
         
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # === SETTINGS TAB CONTENT ===
+        self.setup_settings_tab(settings_tab)
+    
+        # === SETTINGS TAB CONTENT ===
+        self.setup_settings_tab(settings_tab)
+    
+    def setup_settings_tab(self, parent):
+        """Setup the settings tab with version info and help"""
+        # Main container with padding
+        container = tk.Frame(parent, bg=self.bg_dark)
+        container.pack(fill=tk.BOTH, expand=True, padx=40, pady=40)
+        
+        # Title
+        title = tk.Label(
+            container,
+            text="Settings & Information",
+            font=("Segoe UI", 28, "bold"),
+            fg="white",
+            bg=self.bg_dark
+        )
+        title.pack(anchor="w", pady=(0, 30))
+        
+        # Version section
+        version_card = tk.Frame(container, bg=self.card_bg_dark)
+        version_card.pack(fill=tk.X, pady=(0, 20))
+        
+        version_header = tk.Label(
+            version_card,
+            text="🔄 Version & Updates",
+            font=("Segoe UI", 16, "bold"),
+            fg="white",
+            bg=self.card_bg_dark
+        )
+        version_header.pack(anchor="w", padx=30, pady=(20, 10))
+        
+        current_ver = get_current_version()
+        version_text = current_ver if current_ver else "Unknown"
+        
+        version_info = tk.Label(
+            version_card,
+            text=f"Current Version: {version_text}",
+            font=("Segoe UI", 12),
+            fg="#cccccc",
+            bg=self.card_bg_dark
+        )
+        version_info.pack(anchor="w", padx=30, pady=(0, 15))
+        
+        update_btn_frame = tk.Frame(version_card, bg=self.card_bg_dark)
+        update_btn_frame.pack(anchor="w", padx=30, pady=(0, 20))
+        
+        ModernButton(
+            update_btn_frame,
+            "Check for Updates",
+            lambda: check_for_updates(show_no_update_message=True),
+            width=200
+        ).pack(side=tk.LEFT)
+        
+        # Help section
+        help_card = tk.Frame(container, bg=self.card_bg_dark)
+        help_card.pack(fill=tk.BOTH, expand=True)
+        
+        help_header = tk.Label(
+            help_card,
+            text="❓ Help & Features",
+            font=("Segoe UI", 16, "bold"),
+            fg="white",
+            bg=self.card_bg_dark
+        )
+        help_header.pack(anchor="w", padx=30, pady=(20, 10))
+        
+        # Scrollable help content
+        help_scroll_frame = tk.Frame(help_card, bg=self.card_bg_dark)
+        help_scroll_frame.pack(fill=tk.BOTH, expand=True, padx=30, pady=(0, 20))
+        
+        help_canvas = tk.Canvas(help_scroll_frame, bg=self.card_bg_dark, highlightthickness=0)
+        help_scrollbar = tk.Scrollbar(help_scroll_frame, orient="vertical", command=help_canvas.yview)
+        help_scrollable = tk.Frame(help_canvas, bg=self.card_bg_dark)
+        
+        help_scrollable.bind(
+            "<Configure>",
+            lambda e: help_canvas.configure(scrollregion=help_canvas.bbox("all"))
+        )
+        
+        help_canvas.create_window((0, 0), window=help_scrollable, anchor="nw")
+        help_canvas.configure(yscrollcommand=help_scrollbar.set)
+        
+        # Enable mousewheel scrolling
+        def _on_mousewheel(event):
+            help_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        
+        def _bind_mousewheel(event):
+            help_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        
+        def _unbind_mousewheel(event):
+            help_canvas.unbind_all("<MouseWheel>")
+        
+        help_canvas.bind("<Enter>", _bind_mousewheel)
+        help_canvas.bind("<Leave>", _unbind_mousewheel)
+        
+        help_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        help_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Help content
+        help_sections = [
+            ("🪟 Adding Windows", 
+             "Click '＋ Add Window' to select any open window to monitor. The window will appear as a live thumbnail that updates automatically."),
+            
+            ("👆 Click to Expand", 
+             "Click on any thumbnail to bring that window to the front and restore it if minimized."),
+            
+            ("🔴🟢 Status Indicators", 
+             "Each window has a colored dot in the top-right:\n• Green = Window is minimized (low CPU usage)\n• Red = Window is active/not minimized (high CPU usage)"),
+            
+            ("⚡ Auto-Minimize", 
+             "When enabled, windows you click to expand will automatically minimize when you click away from them. Perfect for quickly checking windows without cluttering your screen."),
+            
+            ("🎬 Movie Mode", 
+             "Reduces the capture frame rate to 5 FPS (from 20 FPS) to save CPU resources when you don't need real-time updates."),
+            
+            ("↑↓ Rearrange Windows", 
+             "Use the up/down arrows on each card to reorder your windows in the grid."),
+            
+            ("✕ Remove", 
+             "Click the 'Remove' button to stop monitoring a window and remove it from the grid."),
+            
+            ("💡 Tips", 
+             "• Minimize windows when not actively using them to reduce CPU usage\n• Use Movie Mode when monitoring many windows\n• The app works best with 5 windows per row\n• No admin rights required!")
+        ]
+        
+        for i, (section_title, description) in enumerate(help_sections):
+            section_frame = tk.Frame(help_scrollable, bg=self.card_bg_dark)
+            section_frame.pack(fill=tk.X, pady=8)
+            
+            title_label = tk.Label(
+                section_frame,
+                text=section_title,
+                font=("Segoe UI", 11, "bold"),
+                fg="white",
+                bg=self.card_bg_dark,
+                anchor="w",
+                justify=tk.LEFT
+            )
+            title_label.pack(fill=tk.X, pady=(0, 5))
+            
+            desc_label = tk.Label(
+                section_frame,
+                text=description,
+                font=("Segoe UI", 10),
+                fg="#aaaaaa",
+                bg=self.card_bg_dark,
+                anchor="w",
+                justify=tk.LEFT,
+                wraplength=800
+            )
+            desc_label.pack(fill=tk.X, padx=(15, 0))
+            
+            if i < len(help_sections) - 1:
+                separator = tk.Frame(help_scrollable, bg="#444444", height=1)
+                separator.pack(fill=tk.X, pady=10)
     
     def create_toggle_button(self, parent, text, variable, command):
         return ModernToggle(parent, text, variable, command)
@@ -544,125 +726,6 @@ class PiPBoard:
         
         listbox.bind('<Double-Button-1>', lambda e: on_select())
     
-    def show_help(self):
-        """Show help dialog explaining all features"""
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Multi-Client Viewer - Help")
-        dialog.geometry("700x600")
-        dialog.configure(bg=self.bg_dark)
-        dialog.transient(self.root)
-        dialog.grab_set()
-        
-        # Header
-        header = tk.Label(
-            dialog,
-            text="Multi-Client Viewer - Feature Guide",
-            font=("Segoe UI", 20, "bold"),
-            fg="white",
-            bg=self.bg_dark
-        )
-        header.pack(pady=(20, 10), padx=20)
-        
-        # Scrollable content
-        content_frame = tk.Frame(dialog, bg=self.bg_dark)
-        content_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
-        
-        canvas = tk.Canvas(content_frame, bg=self.card_bg_dark, highlightthickness=0)
-        scrollbar = tk.Scrollbar(content_frame, orient="vertical", command=canvas.yview)
-        scrollable = tk.Frame(canvas, bg=self.card_bg_dark)
-        
-        scrollable.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        
-        canvas.create_window((0, 0), window=scrollable, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        # Enable mousewheel scrolling
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        
-        def _bind_mousewheel(event):
-            canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        
-        def _unbind_mousewheel(event):
-            canvas.unbind_all("<MouseWheel>")
-        
-        canvas.bind("<Enter>", _bind_mousewheel)
-        canvas.bind("<Leave>", _unbind_mousewheel)
-        
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        # Help content
-        help_sections = [
-            ("🪟 Adding Windows", 
-             "Click '＋ Add Window' to select any open window to monitor. The window will appear as a live thumbnail that updates automatically."),
-            
-            ("👆 Click to Expand", 
-             "Click on any thumbnail to bring that window to the front and restore it if minimized."),
-            
-            ("🔴🟢 Status Indicators", 
-             "Each window has a colored dot in the top-right:\n• Green = Window is minimized (low CPU usage)\n• Red = Window is active/not minimized (high CPU usage)"),
-            
-            ("⚡ Auto-Minimize", 
-             "When enabled, windows you click to expand will automatically minimize when you click away from them. Perfect for quickly checking windows without cluttering your screen."),
-            
-            ("🎬 Movie Mode", 
-             "Reduces the capture frame rate to 5 FPS (from 20 FPS) to save CPU resources when you don't need real-time updates."),
-            
-            ("↑↓ Rearrange Windows", 
-             "Use the up/down arrows on each card to reorder your windows in the grid."),
-            
-            ("✕ Remove", 
-             "Click the 'Remove' button to stop monitoring a window and remove it from the grid."),
-            
-            ("🔄 Auto-Update", 
-             "The app automatically checks for updates on startup. Click '🔄 Check Updates' to manually check for new versions."),
-            
-            ("💡 Tips", 
-             "• Minimize windows when not actively using them to reduce CPU usage\n• Use Movie Mode when monitoring many windows\n• The app works best with 5 windows per row\n• No admin rights required!")
-        ]
-        
-        for i, (title, description) in enumerate(help_sections):
-            section_frame = tk.Frame(scrollable, bg=self.card_bg_dark)
-            section_frame.pack(fill=tk.X, padx=20, pady=10)
-            
-            title_label = tk.Label(
-                section_frame,
-                text=title,
-                font=("Segoe UI", 12, "bold"),
-                fg="white",
-                bg=self.card_bg_dark,
-                anchor="w",
-                justify=tk.LEFT
-            )
-            title_label.pack(fill=tk.X, pady=(5, 5))
-            
-            desc_label = tk.Label(
-                section_frame,
-                text=description,
-                font=("Segoe UI", 10),
-                fg="#cccccc",
-                bg=self.card_bg_dark,
-                anchor="w",
-                justify=tk.LEFT,
-                wraplength=600
-            )
-            desc_label.pack(fill=tk.X, padx=(10, 0))
-            
-            if i < len(help_sections) - 1:
-                separator = tk.Frame(scrollable, bg="#444444", height=1)
-                separator.pack(fill=tk.X, padx=30, pady=5)
-        
-        # Close button
-        button_frame = tk.Frame(dialog, bg=self.bg_dark)
-        button_frame.pack(pady=20)
-        
-        ModernButton(button_frame, "Got it!", dialog.destroy, width=150).pack()
-        
-        
     def add_client(self, hwnd, title):
         with self.client_lock:
             if hwnd in self.clients:
