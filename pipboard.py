@@ -1,23 +1,17 @@
 """
 Multi-Client Viewer - Modern Multi-Client Picture-in-Picture Viewer
-Features:
-- Modern UI with rounded corners and smooth animations
-- Dark mode with gradient backgrounds
-- Drag and drop to rearrange clients
-- Click to expand, filter added windows, visible dialog buttons
-- AUTO-MINIMIZE: Automatically minimizes expanded clients when you click away
-- Client status indicators (Green=Minimized/Low CPU, Red=Active/High CPU)
-- Thread-safe with proper locking mechanisms
-- No admin rights required
-- Auto-update functionality
+FIXED VERSION v2 - Status light repositioned, light mode visibility fixed, 5 column max
+
+PART 1 OF 4
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, colorchooser
 from PIL import Image, ImageGrab, ImageTk, ImageDraw
 import win32gui
 import win32con
 import win32ui
+import win32process
 from ctypes import windll
 import time
 import threading
@@ -30,7 +24,7 @@ import os
 import subprocess
 import tempfile
 import queue
-
+import psutil
 import webbrowser
 import io
 
@@ -38,6 +32,16 @@ import io
 IN_MEMORY_VERSION = None
 IN_MEMORY_LOGS = []
 MAX_LOG_ENTRIES = 1000
+
+# Settings storage
+IN_MEMORY_SETTINGS = {
+    "theme": "dark",
+    "accent_color": "#007AFF",
+    "grid_columns": 5,
+    "thumbnail_size": "medium",
+    "window_positions": {},
+    "last_monitor": 0
+}
 
 class MemoryLogHandler(logging.Handler):
     """Custom log handler that stores logs in memory"""
@@ -60,10 +64,19 @@ def save_current_version(version):
     global IN_MEMORY_VERSION
     IN_MEMORY_VERSION = version
 
+def get_setting(key, default=None):
+    """Get setting from memory"""
+    global IN_MEMORY_SETTINGS
+    return IN_MEMORY_SETTINGS.get(key, default)
+
+def save_setting(key, value):
+    """Save setting to memory"""
+    global IN_MEMORY_SETTINGS
+    IN_MEMORY_SETTINGS[key] = value
+
 def compare_versions(current, latest):
     """Compare version strings (e.g., '1.0.6' vs '1.0.7')"""
     try:
-        # Remove 'v' prefix if present
         current = current.lstrip('v') if current else "0.0.0"
         latest = latest.lstrip('v') if latest else "0.0.0"
         
@@ -72,7 +85,7 @@ def compare_versions(current, latest):
         
         return latest_parts > current_parts
     except:
-        return True  # If comparison fails, assume update is available
+        return True
 
 def get_latest_release():
     """Fetch the latest release info from GitHub"""
@@ -103,17 +116,13 @@ def check_for_updates(show_no_update_message=False):
             messagebox.showinfo("Update Check", "No version information available.")
         return
     
-    # Get current version
     current_version = get_current_version()
     
-    # Compare versions
     if current_version and not compare_versions(current_version, latest_version):
-        # Already on latest version
         if show_no_update_message:
             messagebox.showinfo("No Update", f"You're already on the latest version ({current_version})!")
         return
     
-    # Show update available message
     result = messagebox.askyesno(
         "Update Available",
         f"A new version ({latest_version}) is available!\n\n"
@@ -123,20 +132,18 @@ def check_for_updates(show_no_update_message=False):
     
     if result:
         webbrowser.open(release_url)
-        # Save the latest version so we don't prompt again
         save_current_version(latest_version)
 
 def check_updates_on_startup():
     """Check for updates in background thread on startup"""
     def bg_check():
-        # First time setup - if no version file exists, create it with the latest version
         if not get_current_version():
             release_info = get_latest_release()
             if release_info:
                 latest_version = release_info.get('tag_name', '').lstrip('v')
                 if latest_version:
                     save_current_version(latest_version)
-                    return  # Don't show update prompt on first launch
+                    return
         
         check_for_updates(show_no_update_message=False)
     
@@ -149,14 +156,12 @@ def setup_logging():
     logger.setLevel(logging.DEBUG)
     logger.handlers = []
     
-    # Add memory handler
     memory_handler = MemoryLogHandler()
     memory_handler.setLevel(logging.DEBUG)
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     memory_handler.setFormatter(formatter)
     logger.addHandler(memory_handler)
     
-    # Also add console handler as fallback
     console = logging.StreamHandler(sys.stdout)
     console.setLevel(logging.INFO)
     console.setFormatter(formatter)
@@ -165,6 +170,23 @@ def setup_logging():
     return logger
 
 setup_logging()
+
+def get_process_cpu_usage(hwnd):
+    """Get CPU usage for a specific window"""
+    try:
+        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+        process = psutil.Process(pid)
+        cpu = process.cpu_percent(interval=None)
+        return cpu if cpu > 0 else 0.0
+    except:
+        return 0.0
+
+# Thumbnail size presets (width, height)
+THUMBNAIL_SIZES = {
+    "small": (240, 180),
+    "medium": (320, 240),
+    "large": (480, 360)
+}
 
 class ModernButton(tk.Canvas):
     """Custom modern button with hover effects"""
@@ -192,7 +214,11 @@ class ModernButton(tk.Canvas):
     def draw(self):
         self.delete("all")
         color = self.hover_bg if self.is_hovered else self.bg
-        self.configure(bg=self.master['bg'])
+        try:
+            parent_bg = self.master.cget('bg')
+            self.configure(bg=parent_bg)
+        except:
+            pass
         
         width = self.button_width
         height = 36
@@ -236,12 +262,19 @@ class ModernButton(tk.Canvas):
 
 class ModernToggle(tk.Frame):
     """Custom modern toggle switch"""
-    def __init__(self, parent, text, variable, command=None, **kwargs):
-        super().__init__(parent, bg=parent['bg'], **kwargs)
+    def __init__(self, parent, text, variable, command=None, text_color=None, **kwargs):
+        # Get parent background safely
+        try:
+            parent_bg = parent.cget('bg')
+        except:
+            parent_bg = "#1a1a1a"
+        
+        super().__init__(parent, bg=parent_bg, **kwargs)
         self.variable = variable
         self.command = command
         self.text = text
-        self.bg_color = parent['bg']
+        self.bg_color = parent_bg
+        self.text_color = text_color if text_color else "white"
         
         container = tk.Frame(self, bg=self.bg_color)
         container.pack(padx=10, pady=5)
@@ -250,7 +283,7 @@ class ModernToggle(tk.Frame):
             container,
             text=text,
             font=("Segoe UI", 10),
-            fg="white",
+            fg=self.text_color,
             bg=self.bg_color
         )
         self.label.pack(side=tk.LEFT, padx=(0, 10))
@@ -276,7 +309,7 @@ class ModernToggle(tk.Frame):
         self.toggle_canvas.delete("all")
         is_on = self.variable.get()
         
-        bg_color = "#007AFF" if is_on else "#3a3a3a"
+        bg_color = get_setting("accent_color", "#007AFF") if is_on else "#3a3a3a"
         self._create_rounded_rect(
             self.toggle_canvas,
             2, 2, 48, 24, 12,
@@ -320,22 +353,53 @@ class ModernToggle(tk.Frame):
             x1, y1+radius,
             x1, y1
         ]
-        # CONTINUATION FROM PART 1
-# Last line from Part 1:
         return canvas.create_polygon(points, smooth=True, **kwargs)
 
 class PiPBoard:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Multi-Client Viewer")
-        self.root.geometry("2000x1080")
+        # Don't set initial geometry - let restore_window_position handle it
+        # self.root.geometry("2000x1080")
         
-        self.dark_mode = True
-        self.bg_dark = "#1a1a1a"
-        self.bg_light = "#f5f5f5"
-        self.card_bg_dark = "#2a2a2a"
-        self.card_bg_light = "#ffffff"
-        self.accent_color = "#007AFF"
+        # Load theme settings FIRST before using them
+        self.current_theme = get_setting("theme", "dark")
+        self.accent_color = get_setting("accent_color", "#007AFF")
+        self.grid_columns = get_setting("grid_columns", 5)
+        
+        # Theme colors - DEFINE BEFORE ANY UI SETUP
+        self.themes = {
+            "dark": {
+                "bg": "#1a1a1a",
+                "card_bg": "#2a2a2a",
+                "text": "white",
+                "text_secondary": "#aaaaaa",
+                "button_bg": "#666666",
+                "button_hover": "#555555",
+                "button_text": "white",
+                "toggle_text": "white"
+            },
+            "light": {
+                "bg": "#f5f5f5",
+                "card_bg": "#ffffff",
+                "text": "#1a1a1a",
+                "text_secondary": "#666666",
+                "button_bg": "#d0d0d0",
+                "button_hover": "#b0b0b0",
+                "button_text": "#1a1a1a",
+                "toggle_text": "#1a1a1a"
+            }
+        }
+        
+        # Set theme colors
+        self.bg_color = self.themes[self.current_theme]["bg"]
+        self.card_bg = self.themes[self.current_theme]["card_bg"]
+        self.text_color = self.themes[self.current_theme]["text"]
+        self.text_secondary = self.themes[self.current_theme]["text_secondary"]
+        self.button_bg = self.themes[self.current_theme]["button_bg"]
+        self.button_hover = self.themes[self.current_theme]["button_hover"]
+        self.button_text = self.themes[self.current_theme]["button_text"]
+        self.toggle_text = self.themes[self.current_theme]["toggle_text"]
         
         self.fps = 20
         self.movie_mode = False
@@ -350,18 +414,23 @@ class PiPBoard:
         self.client_lock = threading.Lock()
         self.expanded_lock = threading.Lock()
         
-        # UI update queue to prevent blocking
         self.ui_queue = queue.Queue()
         
-        # Debug panel state
         self.debug_panel_visible = False
         self.debug_panel = None
         
+        # Calculate initial thumbnail size
+        self.calculate_thumbnail_size()
+        
+        # Setup UI
         self.setup_modern_ui()
         
-        # Start UI queue processor
         self.process_ui_queue()
         
+        # Restore position after UI is fully loaded
+        self.root.after(200, self.restore_window_position)
+        
+        # Start threads
         self.capture_thread = threading.Thread(target=self.capture_loop, daemon=True)
         self.capture_thread.start()
         
@@ -371,10 +440,122 @@ class PiPBoard:
         self.status_monitor_thread = threading.Thread(target=self.monitor_window_states, daemon=True)
         self.status_monitor_thread.start()
         
-        # Check for updates on startup
+        self.cpu_monitor_thread = threading.Thread(target=self.monitor_cpu_usage, daemon=True)
+        self.cpu_monitor_thread.start()
+        
         check_updates_on_startup()
         
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+    
+    def calculate_thumbnail_size(self):
+        """Calculate optimal thumbnail size based on grid columns and screen size"""
+        try:
+            # Get screen width
+            self.root.update_idletasks()
+            screen_width = self.root.winfo_screenwidth()
+            
+            # Calculate available width (accounting for window borders, padding, scrollbar)
+            window_padding = 60  # Total horizontal padding in window
+            scrollbar_width = 20  # Scrollbar width
+            card_margin = 24  # Total margin per card (12px each side)
+            card_internal_padding = 30  # Padding inside card
+            
+            # Available width for all columns
+            available_width = screen_width - window_padding - scrollbar_width
+            
+            # Calculate width per column
+            width_per_column = available_width / self.grid_columns
+            
+            # Calculate actual thumbnail width
+            thumbnail_width = int(width_per_column - card_margin - card_internal_padding)
+            
+            # Ensure reasonable size constraints
+            thumbnail_width = max(180, min(thumbnail_width, 600))
+            
+            # Calculate height (4:3 aspect ratio)
+            thumbnail_height = int(thumbnail_width * 0.75)
+            
+            # Store as tuple
+            self.current_thumbnail_size = (thumbnail_width, thumbnail_height)
+            
+            logging.info(f"Calculated thumbnail size: {self.current_thumbnail_size} for {self.grid_columns} columns (screen: {screen_width}px)")
+            
+        except Exception as e:
+            logging.error(f"Error calculating thumbnail size: {e}")
+            # Fallback to medium size
+            self.current_thumbnail_size = (320, 240)
+    
+    def on_window_configure(self, event):
+        """Save window position when moved"""
+        if event.widget == self.root:
+            # Use after_idle to debounce and ensure we capture final position
+            if hasattr(self, '_save_position_job'):
+                self.root.after_cancel(self._save_position_job)
+            self._save_position_job = self.root.after(500, self._save_window_position)
+    
+    def _save_window_position(self):
+        """Actually save the window position"""
+        try:
+            positions = get_setting("window_positions", {})
+            # Check if window is maximized
+            is_maximized = (self.root.state() == 'zoomed')
+            
+            # Force update to get accurate position
+            self.root.update_idletasks()
+            
+            positions["main"] = {
+                "x": self.root.winfo_x(),
+                "y": self.root.winfo_y(),
+                "width": self.root.winfo_width(),
+                "height": self.root.winfo_height(),
+                "maximized": is_maximized
+            }
+            save_setting("window_positions", positions)
+            logging.debug(f"Saved window position: x={positions['main']['x']}, y={positions['main']['y']}")
+        except Exception as e:
+            logging.error(f"Error saving window position: {e}")
+    
+    def restore_window_position(self):
+        """Restore window position from saved settings"""
+        try:
+            positions = get_setting("window_positions", {})
+            if "main" in positions:
+                pos = positions["main"]
+                
+                # Check if position is valid (not off-screen)
+                x = pos.get('x', 100)
+                y = pos.get('y', 100)
+                width = pos.get('width', 2000)
+                height = pos.get('height', 1080)
+                is_maximized = pos.get("maximized", False)
+                
+                logging.debug(f"Attempting to restore: x={x}, y={y}, w={width}, h={height}, maximized={is_maximized}")
+                
+                # Temporarily unbind configure to avoid triggering saves during restore
+                self.root.unbind("<Configure>")
+                
+                if is_maximized:
+                    # If it was maximized, just set the position and then maximize
+                    self.root.geometry(f"+{x}+{y}")
+                    self.root.update_idletasks()
+                    self.root.after(200, lambda: self.root.state('zoomed'))
+                else:
+                    # Normal window - restore size and position
+                    self.root.geometry(f"{width}x{height}+{x}+{y}")
+                    self.root.update_idletasks()
+                
+                # Re-bind configure after restoration is complete
+                self.root.after(1000, lambda: self.root.bind("<Configure>", self.on_window_configure))
+                
+                logging.debug(f"Window restored successfully")
+            else:
+                logging.debug("No saved window position found, using default")
+                # Re-bind configure immediately if no saved position
+                self.root.bind("<Configure>", self.on_window_configure)
+        except Exception as e:
+            logging.error(f"Error restoring window position: {e}")
+            # Make sure we re-bind even if there's an error
+            self.root.after(1000, lambda: self.root.bind("<Configure>", self.on_window_configure))
     
     def process_ui_queue(self):
         """Process UI updates from background threads safely"""
@@ -399,12 +580,89 @@ class PiPBoard:
             self.ui_queue.put((func, args, kwargs))
         except Exception as e:
             logging.error(f"Error queuing UI update: {e}")
+    
+    def apply_theme(self):
+        """Apply current theme to all UI elements"""
+        # Update theme colors
+        self.bg_color = self.themes[self.current_theme]["bg"]
+        self.card_bg = self.themes[self.current_theme]["card_bg"]
+        self.text_color = self.themes[self.current_theme]["text"]
+        self.text_secondary = self.themes[self.current_theme]["text_secondary"]
+        self.button_bg = self.themes[self.current_theme]["button_bg"]
+        self.button_hover = self.themes[self.current_theme]["button_hover"]
+        self.button_text = self.themes[self.current_theme]["button_text"]
+        self.toggle_text = self.themes[self.current_theme]["toggle_text"]
         
+        self.root.configure(bg=self.bg_color)
+        
+        # Recalculate thumbnail size
+        self.calculate_thumbnail_size()
+        
+        # Store current clients data before destroying widgets
+        with self.client_lock:
+            clients_copy = list(self.clients.items())
+        
+        # Destroy all widgets
+        for widget in self.root.winfo_children():
+            widget.destroy()
+        
+        # Recreate UI
+        self.setup_modern_ui()
+        
+        # Recreate all client cards
+        for hwnd, client_data in clients_copy:
+            self.recreate_client_card(hwnd, client_data)
+    
+    def recreate_client_card(self, hwnd, old_data):
+        """Recreate a client card with current theme"""
+        position = old_data["position"]
+        title = old_data["title"]
+        
+        row = position // self.grid_columns
+        col = position % self.grid_columns
+        
+        card, img_label, controls, title_label, status_indicator, cpu_label = self.create_modern_card(
+            self.scrollable_frame,
+            title,
+            position + 1
+        )
+        
+        card.grid(row=row, column=col, padx=12, pady=12, sticky="nsew")
+        
+        self.scrollable_frame.grid_columnconfigure(col, weight=1, minsize=self.current_thumbnail_size[0] + 30)
+        
+        img_label.bind('<Button-1>', lambda e: self.expand_pip(hwnd))
+        
+        btn_frame = tk.Frame(controls, bg=self.card_bg)
+        btn_frame.pack(side=tk.LEFT)
+        
+        up_btn = tk.Label(btn_frame, text="↑", fg=self.text_color, bg=self.card_bg, cursor="hand2", font=("Segoe UI", 12), padx=10)
+        up_btn.pack(side=tk.LEFT, padx=2)
+        up_btn.bind("<Button-1>", lambda e: self.move_client(hwnd, -1))
+        
+        down_btn = tk.Label(btn_frame, text="↓", fg=self.text_color, bg=self.card_bg, cursor="hand2", font=("Segoe UI", 12), padx=10)
+        down_btn.pack(side=tk.LEFT, padx=2)
+        down_btn.bind("<Button-1>", lambda e: self.move_client(hwnd, 1))
+        
+        remove_btn = tk.Label(controls, text="✕ Remove", fg="#ff4444", bg=self.card_bg, cursor="hand2", font=("Segoe UI", 9))
+        remove_btn.pack(side=tk.RIGHT)
+        remove_btn.bind("<Button-1>", lambda e: self.remove_client(hwnd))
+        
+        with self.client_lock:
+            self.clients[hwnd].update({
+                "frame": card,
+                "label": img_label,
+                "title_label": title_label,
+                "status_indicator": status_indicator,
+                "cpu_label": cpu_label,
+                "row": row,
+                "col": col
+            })
+    
     def setup_modern_ui(self):
-        self.root.configure(bg=self.bg_dark)
+        self.root.configure(bg=self.bg_color)
         
-        # === MAIN CONTENT (no tabs) ===
-        header = tk.Frame(self.root, bg=self.bg_dark, height=80)
+        header = tk.Frame(self.root, bg=self.bg_color, height=80)
         header.pack(side=tk.TOP, fill=tk.X)
         header.pack_propagate(False)
         
@@ -412,44 +670,56 @@ class PiPBoard:
             header, 
             text="Multi-Client Viewer", 
             font=("Segoe UI", 24, "bold"),
-            fg="white",
-            bg=self.bg_dark
+            fg=self.text_color,
+            bg=self.bg_color
         )
         title_label.pack(side=tk.LEFT, padx=30, pady=20)
         
-        controls = tk.Frame(header, bg=self.bg_dark)
+        controls = tk.Frame(header, bg=self.bg_color)
         controls.pack(side=tk.RIGHT, padx=30, pady=20)
         
-        add_btn = ModernButton(controls, "＋ Add Window", self.add_window, width=150)
+        add_btn = ModernButton(controls, "＋ Add Window", self.add_window, bg=self.accent_color, width=150)
         add_btn.pack(side=tk.LEFT, padx=5)
         
-        # Movie Mode toggle
         self.movie_mode_var = tk.BooleanVar(value=False)
         self.movie_toggle = self.create_toggle_button(controls, "🎬 Movie Mode", self.movie_mode_var, self.toggle_movie_mode)
         self.movie_toggle.pack(side=tk.LEFT, padx=8)
         
-        # Auto-minimize toggle
         self.auto_minimize_var = tk.BooleanVar(value=True)
         self.auto_toggle = self.create_toggle_button(controls, "⚡ Auto-Minimize", self.auto_minimize_var, None)
         self.auto_toggle.pack(side=tk.LEFT, padx=8)
         
-        # Utility buttons
-        utility_frame = tk.Frame(controls, bg=self.bg_dark)
+        utility_frame = tk.Frame(controls, bg=self.bg_color)
         utility_frame.pack(side=tk.LEFT, padx=15)
         
-        updates_btn = ModernButton(utility_frame, "🔄 Updates", lambda: check_for_updates(show_no_update_message=True), bg="#666666", hover_bg="#555555", width=120)
+        settings_btn = ModernButton(utility_frame, "⚙️ Settings", self.show_settings_dialog, 
+                                     bg=self.button_bg, hover_bg=self.button_hover, 
+                                     fg=self.button_text, width=120)
+        settings_btn.pack(side=tk.LEFT, padx=3)
+        
+        updates_btn = ModernButton(utility_frame, "🔄 Updates", lambda: check_for_updates(show_no_update_message=True), 
+                                   bg=self.button_bg, hover_bg=self.button_hover, 
+                                   fg=self.button_text, width=120)
         updates_btn.pack(side=tk.LEFT, padx=3)
         
-        help_btn = ModernButton(utility_frame, "❓ Help", self.show_help_dialog, bg="#666666", hover_bg="#555555", width=100)
+        help_btn = ModernButton(utility_frame, "❓ Help", self.show_help_dialog, 
+                                bg=self.button_bg, hover_bg=self.button_hover, 
+                                fg=self.button_text, width=100)
         help_btn.pack(side=tk.LEFT, padx=3)
         
-        debug_btn = ModernButton(utility_frame, "🐛 Debug", self.toggle_debug_panel, bg="#444444", hover_bg="#333333", width=110)
+        chatgpt_btn = ModernButton(utility_frame, "💬 ChatGPT", self.open_chatgpt, 
+                                   bg="#10a37f", hover_bg="#0d8c6d", 
+                                   fg="white", width=120)
+        chatgpt_btn.pack(side=tk.LEFT, padx=3)
+        
+        debug_btn = ModernButton(utility_frame, "🐛 Debug", self.toggle_debug_panel, 
+                                 bg="#444444", hover_bg="#333333", width=110)
         debug_btn.pack(side=tk.LEFT, padx=3)
         
-        status_frame = tk.Frame(controls, bg=self.bg_dark)
+        status_frame = tk.Frame(controls, bg=self.bg_color)
         status_frame.pack(side=tk.LEFT, padx=15)
         
-        self.status_dot = tk.Canvas(status_frame, width=12, height=12, bg=self.bg_dark, highlightthickness=0)
+        self.status_dot = tk.Canvas(status_frame, width=12, height=12, bg=self.bg_color, highlightthickness=0)
         self.status_dot.create_oval(2, 2, 10, 10, fill="#00ff00", outline="")
         self.status_dot.pack(side=tk.LEFT, padx=5)
         
@@ -457,18 +727,18 @@ class PiPBoard:
             status_frame,
             text="Active",
             fg="#00ff00",
-            bg=self.bg_dark,
+            bg=self.bg_color,
             font=("Segoe UI", 10, "bold")
         )
         self.status_label.pack(side=tk.LEFT)
         
-        content = tk.Frame(self.root, bg=self.bg_dark)
+        content = tk.Frame(self.root, bg=self.bg_color)
         content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
         
-        self.canvas = tk.Canvas(content, bg=self.bg_dark, highlightthickness=0)
+        self.canvas = tk.Canvas(content, bg=self.bg_color, highlightthickness=0)
         scrollbar = tk.Scrollbar(content, orient="vertical", command=self.canvas.yview)
         
-        self.scrollable_frame = tk.Frame(self.canvas, bg=self.bg_dark)
+        self.scrollable_frame = tk.Frame(self.canvas, bg=self.bg_color)
         
         self.scrollable_frame.bind(
             "<Configure>",
@@ -481,325 +751,17 @@ class PiPBoard:
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        # Debug panel (hidden by default)
         self.debug_panel = None
         self.debug_panel_visible = False
-        
     
-    def show_help_dialog(self):
-        """Show help dialog with features and tips"""
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Help & Features")
-        dialog.geometry("700x600")
-        dialog.configure(bg=self.bg_dark)
-        dialog.transient(self.root)
-        
-        header = tk.Label(
-            dialog,
-            text="❓ Help & Features",
-            font=("Segoe UI", 20, "bold"),
-            fg="white",
-            bg=self.bg_dark
-        )
-        header.pack(pady=(20, 10), padx=20)
-        
-        # Scrollable help content
-        help_frame = tk.Frame(dialog, bg=self.card_bg_dark)
-        help_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
-        
-        help_canvas = tk.Canvas(help_frame, bg=self.card_bg_dark, highlightthickness=0)
-        help_scrollbar = tk.Scrollbar(help_frame, orient="vertical", command=help_canvas.yview)
-        help_scrollable = tk.Frame(help_canvas, bg=self.card_bg_dark)
-        
-        help_scrollable.bind(
-            "<Configure>",
-            lambda e: help_canvas.configure(scrollregion=help_canvas.bbox("all"))
-        )
-        
-        help_canvas.create_window((0, 0), window=help_scrollable, anchor="nw")
-        help_canvas.configure(yscrollcommand=help_scrollbar.set)
-        
-        # Enable mousewheel scrolling
-        def _on_mousewheel(event):
-            help_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        
-        help_canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        dialog.bind("<Destroy>", lambda e: help_canvas.unbind_all("<MouseWheel>"))
-        
-        help_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=15, pady=15)
-        help_scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=15, padx=(0, 15))
-        
-        help_sections = [
-            ("🪟 Adding Windows", 
-             "Click '＋ Add Window' to select any open window to monitor. The window will appear as a live thumbnail that updates automatically."),
-            
-            ("👆 Click to Expand", 
-             "Click on any thumbnail to bring that window to the front and restore it if minimized."),
-            
-            ("🔴🟢 Status Indicators", 
-             "Each window has a colored dot in the top-right:\n• Green = Window is minimized (low CPU usage)\n• Red = Window is active/not minimized (high CPU usage)"),
-            
-            ("⚡ Auto-Minimize", 
-             "When enabled, windows you click to expand will automatically minimize when you click away from them. Perfect for quickly checking windows without cluttering your screen."),
-            
-            ("🎬 Movie Mode", 
-             "Reduces the capture frame rate to 5 FPS (from 20 FPS) to save CPU resources when you don't need real-time updates."),
-            
-            ("↑↓ Rearrange Windows", 
-             "Use the up/down arrows on each card to reorder your windows in the grid."),
-            
-            ("✕ Remove", 
-             "Click the 'Remove' button to stop monitoring a window and remove it from the grid."),
-            
-            ("💡 Tips", 
-             "• Minimize windows when not actively using them to reduce CPU usage\n• Use Movie Mode when monitoring many windows\n• The app works best with 5 windows per row\n• No admin rights required!")
-        ]
-        
-        for i, (section_title, description) in enumerate(help_sections):
-            section_frame = tk.Frame(help_scrollable, bg=self.card_bg_dark)
-            section_frame.pack(fill=tk.X, pady=8, padx=15)
-            
-            title_label = tk.Label(
-                section_frame,
-                text=section_title,
-                font=("Segoe UI", 11, "bold"),
-                fg="white",
-                bg=self.card_bg_dark,
-                anchor="w",
-                justify=tk.LEFT
-            )
-            title_label.pack(fill=tk.X, pady=(0, 5))
-            
-            desc_label = tk.Label(
-                section_frame,
-                text=description,
-                font=("Segoe UI", 10),
-                fg="#aaaaaa",
-                bg=self.card_bg_dark,
-                anchor="w",
-                justify=tk.LEFT,
-                wraplength=600
-            )
-            desc_label.pack(fill=tk.X, padx=(15, 0))
-            
-            if i < len(help_sections) - 1:
-                separator = tk.Frame(help_scrollable, bg="#444444", height=1)
-                separator.pack(fill=tk.X, pady=10, padx=15)
-        
-        # Close button
-        btn_frame = tk.Frame(dialog, bg=self.bg_dark)
-        btn_frame.pack(pady=(0, 20))
-        ModernButton(btn_frame, "Close", dialog.destroy, width=120).pack()
-    
-    def toggle_debug_panel(self):
-        """Toggle the debug panel visibility"""
-        if self.debug_panel_visible:
-            if self.debug_panel:
-                self.debug_panel.destroy()
-                self.debug_panel = None
-            self.debug_panel_visible = False
-        else:
-            self.show_debug_panel()
-            self.debug_panel_visible = True
-    
-    def show_debug_panel(self):
-        """Show the debug panel overlay"""
-        # Create overlay panel in bottom-right
-        self.debug_panel = tk.Toplevel(self.root)
-        self.debug_panel.title("Debug Panel")
-        self.debug_panel.geometry("600x400")
-        self.debug_panel.configure(bg=self.bg_dark)
-        
-        # Position in bottom-right
-        self.debug_panel.update_idletasks()
-        screen_width = self.root.winfo_screenwidth()
-        screen_height = self.root.winfo_screenheight()
-        x = screen_width - 620
-        y = screen_height - 450
-        self.debug_panel.geometry(f"600x400+{x}+{y}")
-        
-        # Keep on top
-        self.debug_panel.attributes('-topmost', True)
-        
-        # Handle close
-        def on_close():
-            self.debug_panel_visible = False
-            self.debug_panel.destroy()
-            self.debug_panel = None
-        
-        self.debug_panel.protocol("WM_DELETE_WINDOW", on_close)
-        
-        # Header
-        header = tk.Frame(self.debug_panel, bg=self.card_bg_dark, height=50)
-        header.pack(fill=tk.X)
-        header.pack_propagate(False)
-        
-        title_label = tk.Label(
-            header,
-            text="🐛 Debug Panel",
-            font=("Segoe UI", 14, "bold"),
-            fg="white",
-            bg=self.card_bg_dark
-        )
-        title_label.pack(side=tk.LEFT, padx=20, pady=10)
-        
-        close_btn = tk.Label(
-            header,
-            text="✕",
-            font=("Segoe UI", 16),
-            fg="#ff4444",
-            bg=self.card_bg_dark,
-            cursor="hand2"
-        )
-        close_btn.pack(side=tk.RIGHT, padx=20)
-        close_btn.bind("<Button-1>", lambda e: on_close())
-        
-        # Tab system
-        tab_frame = tk.Frame(self.debug_panel, bg=self.bg_dark)
-        tab_frame.pack(fill=tk.X)
-        
-        content_frame = tk.Frame(self.debug_panel, bg=self.bg_dark)
-        content_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Tabs
-        logs_content = tk.Frame(content_frame, bg=self.bg_dark)
-        version_content = tk.Frame(content_frame, bg=self.bg_dark)
-        
-        current_tab = {"name": "logs"}
-        
-        def show_tab(tab_name):
-            logs_content.pack_forget()
-            version_content.pack_forget()
-            
-            if tab_name == "logs":
-                logs_content.pack(fill=tk.BOTH, expand=True)
-                logs_btn.configure(bg=self.accent_color)
-                version_btn.configure(bg=self.card_bg_dark)
-            else:
-                version_content.pack(fill=tk.BOTH, expand=True)
-                version_btn.configure(bg=self.accent_color)
-                logs_btn.configure(bg=self.card_bg_dark)
-            
-            current_tab["name"] = tab_name
-        
-        logs_btn = tk.Label(
-            tab_frame,
-            text="📋 Logs",
-            font=("Segoe UI", 10, "bold"),
-            fg="white",
-            bg=self.accent_color,
-            cursor="hand2",
-            padx=20,
-            pady=10
-        )
-        logs_btn.pack(side=tk.LEFT)
-        logs_btn.bind("<Button-1>", lambda e: show_tab("logs"))
-        
-        version_btn = tk.Label(
-            tab_frame,
-            text="ℹ️ Version",
-            font=("Segoe UI", 10, "bold"),
-            fg="white",
-            bg=self.card_bg_dark,
-            cursor="hand2",
-            padx=20,
-            pady=10
-        )
-        version_btn.pack(side=tk.LEFT)
-        version_btn.bind("<Button-1>", lambda e: show_tab("version"))
-        
-        # Logs tab content
-        logs_scroll_frame = tk.Frame(logs_content, bg=self.card_bg_dark)
-        logs_scroll_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
-        
-        logs_text = tk.Text(
-            logs_scroll_frame,
-            bg=self.card_bg_dark,
-            fg="#cccccc",
-            font=("Consolas", 9),
-            wrap=tk.WORD,
-            relief="flat",
-            padx=10,
-            pady=10
-        )
-        logs_scrollbar = tk.Scrollbar(logs_scroll_frame, command=logs_text.yview)
-        logs_text.configure(yscrollcommand=logs_scrollbar.set)
-        
-        logs_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        logs_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        # Load logs from memory
-        global IN_MEMORY_LOGS
-        for log_entry in IN_MEMORY_LOGS:
-            logs_text.insert(tk.END, log_entry + "\n")
-        
-        logs_text.configure(state=tk.DISABLED)
-        logs_text.see(tk.END)
-        
-        # Version tab content
-        version_info_frame = tk.Frame(version_content, bg=self.card_bg_dark)
-        version_info_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
-        
-        current_ver = get_current_version()
-        version_text = current_ver if current_ver else "Unknown"
-        
-        version_label = tk.Label(
-            version_info_frame,
-            text=f"Current Version: {version_text}",
-            font=("Segoe UI", 14, "bold"),
-            fg="white",
-            bg=self.card_bg_dark
-        )
-        version_label.pack(pady=(20, 10))
-        
-        repo_label = tk.Label(
-            version_info_frame,
-            text=f"Repository: {GITHUB_REPO}",
-            font=("Segoe UI", 10),
-            fg="#aaaaaa",
-            bg=self.card_bg_dark
-        )
-        repo_label.pack(pady=5)
-        
-        # Check for updates button
-        update_btn_frame = tk.Frame(version_info_frame, bg=self.card_bg_dark)
-        update_btn_frame.pack(pady=20)
-        
-        ModernButton(
-            update_btn_frame,
-            "Check for Updates",
-            lambda: check_for_updates(show_no_update_message=True),
-            width=200
-        ).pack()
-        
-        # Show logs tab by default
-        show_tab("logs")
-        
-        # Auto-refresh logs every 2 seconds
-        def refresh_logs():
-            if self.debug_panel and self.debug_panel.winfo_exists() and current_tab["name"] == "logs":
-                try:
-                    logs_text.configure(state=tk.NORMAL)
-                    logs_text.delete("1.0", tk.END)
-                    for log_entry in IN_MEMORY_LOGS:
-                        logs_text.insert(tk.END, log_entry + "\n")
-                    logs_text.configure(state=tk.DISABLED)
-                    logs_text.see(tk.END)
-                    self.debug_panel.after(2000, refresh_logs)
-                except:
-                    pass
-        
-        self.debug_panel.after(2000, refresh_logs)
-    
-    # CONTINUATION FROM PART 2
-# Last line from Part 2:
     def create_toggle_button(self, parent, text, variable, command):
-        return ModernToggle(parent, text, variable, command)
-        
+        return ModernToggle(parent, text, variable, command, text_color=self.toggle_text)
+    
     def create_modern_card(self, parent, title, position):
-        card = tk.Frame(parent, bg=self.card_bg_dark, relief="flat", bd=0)
+        card = tk.Frame(parent, bg=self.card_bg, relief="flat", bd=0)
         
-        header = tk.Frame(card, bg=self.card_bg_dark, height=40)
+        # Header with title and CPU
+        header = tk.Frame(card, bg=self.card_bg, height=40)
         header.pack(fill=tk.X, padx=15, pady=(15, 5))
         header.pack_propagate(False)
         
@@ -807,31 +769,56 @@ class PiPBoard:
             header,
             text=f"#{position} {title}",
             font=("Segoe UI", 11, "bold"),
-            fg="white",
-            bg=self.card_bg_dark,
+            fg=self.text_color,
+            bg=self.card_bg,
             anchor="w"
         )
         title_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
-        status_indicator = tk.Canvas(header, width=10, height=10, bg=self.card_bg_dark, highlightthickness=0)
-        status_indicator.create_oval(2, 2, 8, 8, fill="#00ff00", outline="")
-        status_indicator.pack(side=tk.RIGHT, padx=5)
+        cpu_label = tk.Label(
+            header,
+            text="0%",
+            font=("Segoe UI", 9),
+            fg=self.text_secondary,
+            bg=self.card_bg
+        )
+        cpu_label.pack(side=tk.RIGHT, padx=(10, 5))
         
+        # Image frame
         img_frame = tk.Frame(card, bg="#000000", relief="flat")
         img_frame.pack(padx=15, pady=5)
         
-        img_container = tk.Frame(img_frame, width=320, height=240, bg="#000000")
+        thumb_width, thumb_height = self.current_thumbnail_size
+        img_container = tk.Frame(img_frame, width=thumb_width, height=thumb_height, bg="#000000")
         img_container.pack()
         img_container.pack_propagate(False)
         
         img_label = tk.Label(img_container, bg="#000000", cursor="hand2")
         img_label.pack(fill=tk.BOTH, expand=True)
         
-        controls = tk.Frame(card, bg=self.card_bg_dark)
+        # Status indicator below image
+        status_frame = tk.Frame(card, bg=self.card_bg)
+        status_frame.pack(fill=tk.X, padx=15, pady=(5, 5))
+        
+        status_indicator = tk.Canvas(status_frame, width=10, height=10, bg=self.card_bg, highlightthickness=0)
+        status_indicator.create_oval(2, 2, 8, 8, fill="#00ff00", outline="")
+        status_indicator.pack(side=tk.LEFT, padx=(0, 5))
+        
+        status_text = tk.Label(
+            status_frame,
+            text="Minimized",
+            font=("Segoe UI", 9),
+            fg=self.text_secondary,
+            bg=self.card_bg
+        )
+        status_text.pack(side=tk.LEFT)
+        
+        # Controls at bottom
+        controls = tk.Frame(card, bg=self.card_bg)
         controls.pack(fill=tk.X, padx=15, pady=(5, 15))
         
-        return card, img_label, controls, title_label, status_indicator
-        
+        return card, img_label, controls, title_label, status_indicator, cpu_label
+    
     def get_window_list(self):
         windows = []
         
@@ -846,7 +833,6 @@ class PiPBoard:
         return windows
     
     def add_window(self):
-        # Run window enumeration in background to prevent UI blocking
         def get_windows_async():
             windows = self.get_window_list()
             
@@ -867,7 +853,7 @@ class PiPBoard:
         dialog = tk.Toplevel(self.root)
         dialog.title("Add Window")
         dialog.geometry("500x400")
-        dialog.configure(bg=self.bg_dark)
+        dialog.configure(bg=self.bg_color)
         dialog.transient(self.root)
         dialog.grab_set()
         
@@ -875,20 +861,20 @@ class PiPBoard:
             dialog,
             text="Select a window to monitor",
             font=("Segoe UI", 16, "bold"),
-            fg="white",
-            bg=self.bg_dark
+            fg=self.text_color,
+            bg=self.bg_color
         )
         header.pack(pady=(20, 10), padx=20)
         
-        list_container = tk.Frame(dialog, bg=self.card_bg_dark)
+        list_container = tk.Frame(dialog, bg=self.card_bg)
         list_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
         
         scrollbar = ttk.Scrollbar(list_container)
         listbox = tk.Listbox(
             list_container,
             yscrollcommand=scrollbar.set,
-            bg=self.card_bg_dark,
-            fg="white",
+            bg=self.card_bg,
+            fg=self.text_color,
             font=("Segoe UI", 10),
             selectbackground=self.accent_color,
             selectforeground="white",
@@ -903,7 +889,7 @@ class PiPBoard:
         for hwnd, title in available_windows:
             listbox.insert(tk.END, title)
         
-        button_frame = tk.Frame(dialog, bg=self.bg_dark)
+        button_frame = tk.Frame(dialog, bg=self.bg_color)
         button_frame.pack(pady=20)
         
         def on_select():
@@ -914,7 +900,7 @@ class PiPBoard:
                 dialog.destroy()
         
         ModernButton(button_frame, "Add", on_select, width=120).pack(side=tk.LEFT, padx=5)
-        ModernButton(button_frame, "Cancel", dialog.destroy, bg="#666666", hover_bg="#555555", width=120).pack(side=tk.LEFT, padx=5)
+        ModernButton(button_frame, "Cancel", dialog.destroy, bg=self.button_bg, hover_bg=self.button_hover, width=120).pack(side=tk.LEFT, padx=5)
         
         listbox.bind('<Double-Button-1>', lambda e: on_select())
     
@@ -925,10 +911,10 @@ class PiPBoard:
                 return
             client_count = len(self.clients)
         
-        row = client_count // 5
-        col = client_count % 5
+        row = client_count // self.grid_columns
+        col = client_count % self.grid_columns
         
-        card, img_label, controls, title_label, status_indicator = self.create_modern_card(
+        card, img_label, controls, title_label, status_indicator, cpu_label = self.create_modern_card(
             self.scrollable_frame,
             title,
             client_count + 1
@@ -936,23 +922,24 @@ class PiPBoard:
         
         card.grid(row=row, column=col, padx=12, pady=12, sticky="nsew")
         
-        self.scrollable_frame.grid_columnconfigure(col, weight=1, minsize=360)
+        thumb_width = self.current_thumbnail_size[0]
+        self.scrollable_frame.grid_columnconfigure(col, weight=1, minsize=thumb_width + 30)
         self.scrollable_frame.grid_rowconfigure(row, weight=1)
         
         img_label.bind('<Button-1>', lambda e: self.expand_pip(hwnd))
         
-        btn_frame = tk.Frame(controls, bg=self.card_bg_dark)
+        btn_frame = tk.Frame(controls, bg=self.card_bg)
         btn_frame.pack(side=tk.LEFT)
         
-        up_btn = tk.Label(btn_frame, text="↑", fg="white", bg=self.card_bg_dark, cursor="hand2", font=("Segoe UI", 12), padx=10)
+        up_btn = tk.Label(btn_frame, text="↑", fg=self.text_color, bg=self.card_bg, cursor="hand2", font=("Segoe UI", 12), padx=10)
         up_btn.pack(side=tk.LEFT, padx=2)
         up_btn.bind("<Button-1>", lambda e: self.move_client(hwnd, -1))
         
-        down_btn = tk.Label(btn_frame, text="↓", fg="white", bg=self.card_bg_dark, cursor="hand2", font=("Segoe UI", 12), padx=10)
+        down_btn = tk.Label(btn_frame, text="↓", fg=self.text_color, bg=self.card_bg, cursor="hand2", font=("Segoe UI", 12), padx=10)
         down_btn.pack(side=tk.LEFT, padx=2)
         down_btn.bind("<Button-1>", lambda e: self.move_client(hwnd, 1))
         
-        remove_btn = tk.Label(controls, text="✕ Remove", fg="#ff4444", bg=self.card_bg_dark, cursor="hand2", font=("Segoe UI", 9))
+        remove_btn = tk.Label(controls, text="✕ Remove", fg="#ff4444", bg=self.card_bg, cursor="hand2", font=("Segoe UI", 9))
         remove_btn.pack(side=tk.RIGHT)
         remove_btn.bind("<Button-1>", lambda e: self.remove_client(hwnd))
         
@@ -963,15 +950,76 @@ class PiPBoard:
                 "label": img_label,
                 "title_label": title_label,
                 "status_indicator": status_indicator,
+                "cpu_label": cpu_label,
                 "photo": None,
                 "row": row,
                 "col": col,
                 "last_update": 0,
                 "position": client_count,
-                "is_minimized": False
+                "is_minimized": False,
+                "cpu_usage": 0.0
             }
         
         logging.info(f"Added client: {title} (hwnd: {hwnd})")
+    
+    def monitor_cpu_usage(self):
+        """Monitor CPU usage for each window"""
+        process_cache = {}
+        
+        while self.running:
+            try:
+                with self.client_lock:
+                    clients_copy = list(self.clients.keys())
+                
+                for hwnd in list(process_cache.keys()):
+                    if hwnd not in clients_copy:
+                        del process_cache[hwnd]
+                
+                for hwnd in clients_copy:
+                    if not win32gui.IsWindow(hwnd):
+                        if hwnd in process_cache:
+                            del process_cache[hwnd]
+                        continue
+                    
+                    try:
+                        if hwnd not in process_cache:
+                            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                            proc = psutil.Process(pid)
+                            proc.cpu_percent(interval=None)
+                            process_cache[hwnd] = proc
+                        
+                        cpu_usage = process_cache[hwnd].cpu_percent(interval=None)
+                        
+                        with self.client_lock:
+                            if hwnd in self.clients:
+                                self.clients[hwnd]["cpu_usage"] = cpu_usage
+                                self.queue_ui_update(self.update_cpu_display, hwnd, cpu_usage)
+                                
+                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                        if hwnd in process_cache:
+                            del process_cache[hwnd]
+                    except Exception as e:
+                        logging.error(f"Error getting CPU usage for {hwnd}: {e}")
+                        if hwnd in process_cache:
+                            del process_cache[hwnd]
+                
+                time.sleep(1)
+                
+            except Exception as e:
+                logging.error(f"Error in CPU monitor thread: {e}")
+                time.sleep(2)
+    
+    def update_cpu_display(self, hwnd, cpu_usage):
+        """Update CPU usage display"""
+        try:
+            with self.client_lock:
+                if hwnd not in self.clients:
+                    return
+                cpu_label = self.clients[hwnd]["cpu_label"]
+            
+            cpu_label.configure(text=f"{cpu_usage:.1f}%")
+        except Exception as e:
+            logging.error(f"Error updating CPU display for {hwnd}: {e}")
     
     def monitor_window_states(self):
         """Monitor window states to update status indicators"""
@@ -1003,14 +1051,13 @@ class PiPBoard:
                 time.sleep(1)
     
     def update_client_status(self, hwnd, is_minimized):
-        """Update client status indicator - Green when minimized (low CPU), Red when active (high CPU)"""
+        """Update client status indicator"""
         try:
             with self.client_lock:
                 if hwnd not in self.clients:
                     return
                 status_ind = self.clients[hwnd]["status_indicator"]
             
-            # Green when minimized (low CPU usage), Red when active (high CPU usage)
             color = "#00ff00" if is_minimized else "#ff4444"
             status_ind.delete("all")
             status_ind.create_oval(2, 2, 8, 8, fill=color, outline="")
@@ -1057,7 +1104,6 @@ class PiPBoard:
         logging.info(f"Removed client hwnd: {hwnd}")
     
     def expand_pip(self, hwnd):
-        # Run window operations in background thread to prevent UI blocking
         def expand_async():
             if not win32gui.IsWindow(hwnd):
                 self.queue_ui_update(messagebox.showerror, "Error", "Window no longer exists!")
@@ -1158,14 +1204,17 @@ class PiPBoard:
             sorted_clients = sorted(self.clients.items(), key=lambda x: x[1]["position"])
             
             for index, (hwnd, client_data) in enumerate(sorted_clients):
-                row = index // 5
-                col = index % 5
+                row = index // self.grid_columns
+                col = index % self.grid_columns
                 
                 client_data["frame"].grid(row=row, column=col, padx=12, pady=12, sticky="nsew")
                 client_data["title_label"].configure(text=f"#{index + 1} {client_data['title']}")
                 client_data["row"] = row
                 client_data["col"] = col
                 client_data["position"] = index
+                
+                # Update column configuration
+                self.scrollable_frame.grid_columnconfigure(col, weight=1, minsize=self.current_thumbnail_size[0] + 30)
     
     def capture_window(self, hwnd):
         try:
@@ -1230,7 +1279,8 @@ class PiPBoard:
                     except:
                         pass
                 
-                img = img.resize((320, 240), Image.LANCZOS)
+                thumb_size = self.current_thumbnail_size
+                img = img.resize(thumb_size, Image.LANCZOS)
             
             win32gui.DeleteObject(saveBitMap.GetHandle())
             saveDC.DeleteDC()
@@ -1333,8 +1383,466 @@ class PiPBoard:
             self.status_dot.delete("all")
             self.status_dot.create_oval(2, 2, 10, 10, fill="#00ff00", outline="")
     
+    def show_settings_dialog(self):
+        """Show settings dialog"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Settings")
+        dialog.geometry("600x650")
+        dialog.configure(bg=self.bg_color)
+        dialog.transient(self.root)
+        
+        header = tk.Label(
+            dialog,
+            text="⚙️ Settings",
+            font=("Segoe UI", 20, "bold"),
+            fg=self.text_color,
+            bg=self.bg_color
+        )
+        header.pack(pady=(20, 10), padx=20)
+        
+        content = tk.Frame(dialog, bg=self.card_bg)
+        content.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
+        
+        # Theme Selection
+        theme_frame = tk.Frame(content, bg=self.card_bg)
+        theme_frame.pack(fill=tk.X, padx=20, pady=15)
+        
+        tk.Label(
+            theme_frame,
+            text="Theme",
+            font=("Segoe UI", 12, "bold"),
+            fg=self.text_color,
+            bg=self.card_bg
+        ).pack(anchor="w", pady=(0, 10))
+        
+        theme_buttons = tk.Frame(theme_frame, bg=self.card_bg)
+        theme_buttons.pack(anchor="w")
+        
+        selected_theme = {"current": self.current_theme}
+        
+        def set_theme(theme):
+            selected_theme["current"] = theme
+            save_setting("theme", theme)
+            # Update button colors
+            if theme == "dark":
+                dark_btn.bg = self.accent_color
+                dark_btn.hover_bg = self.accent_color
+                light_btn.bg = self.button_bg
+                light_btn.hover_bg = self.button_hover
+            else:
+                light_btn.bg = self.accent_color
+                light_btn.hover_bg = self.accent_color
+                dark_btn.bg = self.button_bg
+                dark_btn.hover_bg = self.button_hover
+            dark_btn.draw()
+            light_btn.draw()
+        
+        dark_btn_bg = self.accent_color if selected_theme["current"] == "dark" else self.button_bg
+        light_btn_bg = self.accent_color if selected_theme["current"] == "light" else self.button_bg
+        dark_btn_fg = "white"
+        light_btn_fg = self.button_text
+        
+        dark_btn = ModernButton(theme_buttons, "🌙 Dark", lambda: set_theme("dark"),
+                    bg=dark_btn_bg,
+                    fg=dark_btn_fg,
+                    hover_bg=self.button_hover,
+                    width=100)
+        dark_btn.pack(side=tk.LEFT, padx=5)
+        
+        light_btn = ModernButton(theme_buttons, "☀️ Light", lambda: set_theme("light"),
+                    bg=light_btn_bg,
+                    fg=light_btn_fg,
+                    hover_bg=self.button_hover,
+                    width=100)
+        light_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Accent Color
+        accent_frame = tk.Frame(content, bg=self.card_bg)
+        accent_frame.pack(fill=tk.X, padx=20, pady=15)
+        
+        tk.Label(
+            accent_frame,
+            text="Accent Color",
+            font=("Segoe UI", 12, "bold"),
+            fg=self.text_color,
+            bg=self.card_bg
+        ).pack(anchor="w", pady=(0, 10))
+        
+        color_preview = tk.Frame(accent_frame, bg=self.accent_color, width=30, height=30)
+        color_preview.pack(anchor="w", pady=(0, 10))
+        
+        def choose_accent_color():
+            color = colorchooser.askcolor(title="Choose Accent Color", initialcolor=self.accent_color)
+            if color[1]:
+                self.accent_color = color[1]
+                save_setting("accent_color", self.accent_color)
+                color_preview.configure(bg=self.accent_color)
+        
+        ModernButton(accent_frame, "🎨 Choose Color", choose_accent_color, bg=self.accent_color, width=150).pack(anchor="w")
+        
+        # Grid Columns (max 5)
+        grid_frame = tk.Frame(content, bg=self.card_bg)
+        grid_frame.pack(fill=tk.X, padx=20, pady=15)
+        
+        tk.Label(
+            grid_frame,
+            text="Grid Columns",
+            font=("Segoe UI", 12, "bold"),
+            fg=self.text_color,
+            bg=self.card_bg
+        ).pack(anchor="w", pady=(0, 10))
+        
+        grid_desc = tk.Label(
+            grid_frame,
+            text="Thumbnail size automatically adjusts to fit the selected grid layout",
+            font=("Segoe UI", 9),
+            fg=self.text_secondary,
+            bg=self.card_bg,
+            wraplength=500,
+            justify=tk.LEFT
+        )
+        grid_desc.pack(anchor="w", pady=(0, 10))
+        
+        grid_value_label = tk.Label(
+            grid_frame,
+            text=f"{self.grid_columns} columns",
+            font=("Segoe UI", 10, "bold"),
+            fg=self.text_color,
+            bg=self.card_bg
+        )
+        grid_value_label.pack(anchor="w", pady=(0, 5))
+        
+        def on_grid_change(val):
+            self.grid_columns = int(float(val))
+            grid_value_label.configure(text=f"{self.grid_columns} columns")
+            save_setting("grid_columns", self.grid_columns)
+        
+        grid_slider = tk.Scale(
+            grid_frame,
+            from_=3,
+            to=5,  # Changed from 6 to 5
+            orient=tk.HORIZONTAL,
+            command=on_grid_change,
+            bg=self.card_bg,
+            fg=self.text_color,
+            highlightthickness=0,
+            length=300,
+            troughcolor=self.text_secondary
+        )
+        grid_slider.set(self.grid_columns)
+        grid_slider.pack(anchor="w")
+        
+        # Apply and Close buttons
+        btn_frame = tk.Frame(dialog, bg=self.bg_color)
+        btn_frame.pack(pady=20)
+        
+        def apply_and_close():
+            # Save the selected theme from the dialog
+            self.current_theme = selected_theme["current"]
+            save_setting("theme", self.current_theme)
+            
+            dialog.destroy()  # Close dialog first
+            self.calculate_thumbnail_size()
+            self.reorganize_grid()
+            self.apply_theme()  # Apply theme which recreates all cards
+        
+        ModernButton(btn_frame, "Apply & Close", apply_and_close, bg=self.accent_color, width=150).pack(side=tk.LEFT, padx=5)
+        ModernButton(btn_frame, "Close", dialog.destroy, bg=self.button_bg, hover_bg=self.button_hover, fg=self.button_text, width=100).pack(side=tk.LEFT, padx=5)
+    
+    def open_chatgpt(self):
+        """Open ChatGPT in the default web browser"""
+        webbrowser.open("https://chatgpt.com")
+        
+    def show_help_dialog(self):
+        """Show help dialog with features and tips"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Help & Features")
+        dialog.geometry("700x600")
+        dialog.configure(bg=self.bg_color)
+        dialog.transient(self.root)
+        
+        header = tk.Label(
+            dialog,
+            text="❓ Help & Features",
+            font=("Segoe UI", 20, "bold"),
+            fg=self.text_color,
+            bg=self.bg_color
+        )
+        header.pack(pady=(20, 10), padx=20)
+        
+        help_frame = tk.Frame(dialog, bg=self.card_bg)
+        help_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
+        
+        help_canvas = tk.Canvas(help_frame, bg=self.card_bg, highlightthickness=0)
+        help_scrollbar = tk.Scrollbar(help_frame, orient="vertical", command=help_canvas.yview)
+        help_scrollable = tk.Frame(help_canvas, bg=self.card_bg)
+        
+        help_scrollable.bind(
+            "<Configure>",
+            lambda e: help_canvas.configure(scrollregion=help_canvas.bbox("all"))
+        )
+        
+        help_canvas.create_window((0, 0), window=help_scrollable, anchor="nw")
+        help_canvas.configure(yscrollcommand=help_scrollbar.set)
+        
+        def _on_mousewheel(event):
+            help_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        
+        help_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        dialog.bind("<Destroy>", lambda e: help_canvas.unbind_all("<MouseWheel>"))
+        
+        help_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=15, pady=15)
+        help_scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=15, padx=(0, 15))
+        
+        help_sections = [
+            ("🪟 Adding Windows", 
+             "Click '＋ Add Window' to select any open window to monitor. The window will appear as a live thumbnail that updates automatically."),
+            ("👆 Click to Expand", 
+             "Click on any thumbnail to bring that window to the front and restore it if minimized."),
+            ("🔴🟢 Status Indicators", 
+             "Each window has a colored dot below the thumbnail:\n• Green = Window is minimized (low resource usage)\n• Red = Window is active/not minimized (high resource usage)"),
+            ("📊 CPU Usage", 
+             "Each thumbnail shows real-time CPU usage percentage in the top-right corner."),
+            ("⚙️ Settings", 
+             "Customize themes (Dark/Light), accent colors, and grid layout (3-5 columns). Thumbnail size automatically adjusts to fit your screen!"),
+            ("🖥️ Auto-Sizing", 
+             "The app automatically calculates the perfect thumbnail size for your screen resolution and grid layout."),
+            ("⚡ Auto-Minimize", 
+             "When enabled, windows you click to expand will automatically minimize when you click away from them."),
+            ("🎬 Movie Mode", 
+             "Reduces the capture frame rate to 5 FPS (from 20 FPS) to save CPU resources."),
+        ]
+        
+        for i, (section_title, description) in enumerate(help_sections):
+            section_frame = tk.Frame(help_scrollable, bg=self.card_bg)
+            section_frame.pack(fill=tk.X, pady=8, padx=15)
+            
+            title_label = tk.Label(
+                section_frame,
+                text=section_title,
+                font=("Segoe UI", 11, "bold"),
+                fg=self.text_color,
+                bg=self.card_bg,
+                anchor="w",
+                justify=tk.LEFT
+            )
+            title_label.pack(fill=tk.X, pady=(0, 5))
+            
+            desc_label = tk.Label(
+                section_frame,
+                text=description,
+                font=("Segoe UI", 10),
+                fg=self.text_secondary,
+                bg=self.card_bg,
+                anchor="w",
+                justify=tk.LEFT,
+                wraplength=600
+            )
+            desc_label.pack(fill=tk.X, padx=(15, 0))
+            
+            if i < len(help_sections) - 1:
+                separator_color = "#444444" if self.current_theme == "dark" else "#dddddd"
+                separator = tk.Frame(help_scrollable, bg=separator_color, height=1)
+                separator.pack(fill=tk.X, pady=10, padx=15)
+        
+        btn_frame = tk.Frame(dialog, bg=self.bg_color)
+        btn_frame.pack(pady=(0, 20))
+        ModernButton(btn_frame, "Close", dialog.destroy, bg=self.accent_color, width=120).pack()
+    
+    def toggle_debug_panel(self):
+        """Toggle the debug panel visibility"""
+        if self.debug_panel_visible:
+            if self.debug_panel:
+                self.debug_panel.destroy()
+                self.debug_panel = None
+            self.debug_panel_visible = False
+        else:
+            self.show_debug_panel()
+            self.debug_panel_visible = True
+    
+    def show_debug_panel(self):
+        """Show the debug panel overlay"""
+        self.debug_panel = tk.Toplevel(self.root)
+        self.debug_panel.title("Debug Panel")
+        self.debug_panel.geometry("600x400")
+        self.debug_panel.configure(bg=self.bg_color)
+        
+        self.debug_panel.update_idletasks()
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        x = screen_width - 620
+        y = screen_height - 450
+        self.debug_panel.geometry(f"600x400+{x}+{y}")
+        
+        self.debug_panel.attributes('-topmost', True)
+        
+        def on_close():
+            self.debug_panel_visible = False
+            self.debug_panel.destroy()
+            self.debug_panel = None
+        
+        self.debug_panel.protocol("WM_DELETE_WINDOW", on_close)
+        
+        header = tk.Frame(self.debug_panel, bg=self.card_bg, height=50)
+        header.pack(fill=tk.X)
+        header.pack_propagate(False)
+        
+        title_label = tk.Label(
+            header,
+            text="🐛 Debug Panel",
+            font=("Segoe UI", 14, "bold"),
+            fg=self.text_color,
+            bg=self.card_bg
+        )
+        title_label.pack(side=tk.LEFT, padx=20, pady=10)
+        
+        close_btn = tk.Label(
+            header,
+            text="✕",
+            font=("Segoe UI", 16),
+            fg="#ff4444",
+            bg=self.card_bg,
+            cursor="hand2"
+        )
+        close_btn.pack(side=tk.RIGHT, padx=20)
+        close_btn.bind("<Button-1>", lambda e: on_close())
+        
+        tab_frame = tk.Frame(self.debug_panel, bg=self.bg_color)
+        tab_frame.pack(fill=tk.X)
+        
+        content_frame = tk.Frame(self.debug_panel, bg=self.bg_color)
+        content_frame.pack(fill=tk.BOTH, expand=True)
+        
+        logs_content = tk.Frame(content_frame, bg=self.bg_color)
+        version_content = tk.Frame(content_frame, bg=self.bg_color)
+        
+        current_tab = {"name": "logs"}
+        
+        def show_tab(tab_name):
+            logs_content.pack_forget()
+            version_content.pack_forget()
+            
+            if tab_name == "logs":
+                logs_content.pack(fill=tk.BOTH, expand=True)
+                logs_btn.configure(bg=self.accent_color)
+                version_btn.configure(bg=self.card_bg)
+            else:
+                version_content.pack(fill=tk.BOTH, expand=True)
+                version_btn.configure(bg=self.accent_color)
+                logs_btn.configure(bg=self.card_bg)
+            
+            current_tab["name"] = tab_name
+        
+        logs_btn = tk.Label(
+            tab_frame,
+            text="📋 Logs",
+            font=("Segoe UI", 10, "bold"),
+            fg=self.text_color,
+            bg=self.accent_color,
+            cursor="hand2",
+            padx=20,
+            pady=10
+        )
+        logs_btn.pack(side=tk.LEFT)
+        logs_btn.bind("<Button-1>", lambda e: show_tab("logs"))
+        
+        version_btn = tk.Label(
+            tab_frame,
+            text="ℹ️ Version",
+            font=("Segoe UI", 10, "bold"),
+            fg=self.text_color,
+            bg=self.card_bg,
+            cursor="hand2",
+            padx=20,
+            pady=10
+        )
+        version_btn.pack(side=tk.LEFT)
+        version_btn.bind("<Button-1>", lambda e: show_tab("version"))
+        
+        logs_scroll_frame = tk.Frame(logs_content, bg=self.card_bg)
+        logs_scroll_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
+        log_text_color = "#cccccc" if self.current_theme == "dark" else "#333333"
+        
+        logs_text = tk.Text(
+            logs_scroll_frame,
+            bg=self.card_bg,
+            fg=log_text_color,
+            font=("Consolas", 9),
+            wrap=tk.WORD,
+            relief="flat",
+            padx=10,
+            pady=10
+        )
+        logs_scrollbar = tk.Scrollbar(logs_scroll_frame, command=logs_text.yview)
+        logs_text.configure(yscrollcommand=logs_scrollbar.set)
+        
+        logs_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        logs_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        global IN_MEMORY_LOGS
+        for log_entry in IN_MEMORY_LOGS:
+            logs_text.insert(tk.END, log_entry + "\n")
+        
+        logs_text.configure(state=tk.DISABLED)
+        logs_text.see(tk.END)
+        
+        version_info_frame = tk.Frame(version_content, bg=self.card_bg)
+        version_info_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
+        current_ver = get_current_version()
+        version_text = current_ver if current_ver else "Unknown"
+        
+        version_label = tk.Label(
+            version_info_frame,
+            text=f"Current Version: {version_text}",
+            font=("Segoe UI", 14, "bold"),
+            fg=self.text_color,
+            bg=self.card_bg
+        )
+        version_label.pack(pady=(20, 10))
+        
+        repo_label = tk.Label(
+            version_info_frame,
+            text=f"Repository: {GITHUB_REPO}",
+            font=("Segoe UI", 10),
+            fg=self.text_secondary,
+            bg=self.card_bg
+        )
+        repo_label.pack(pady=5)
+        
+        update_btn_frame = tk.Frame(version_info_frame, bg=self.card_bg)
+        update_btn_frame.pack(pady=20)
+        
+        ModernButton(
+            update_btn_frame,
+            "Check for Updates",
+            lambda: check_for_updates(show_no_update_message=True),
+            bg=self.accent_color,
+            width=200
+        ).pack()
+        
+        show_tab("logs")
+        
+        def refresh_logs():
+            if self.debug_panel and self.debug_panel.winfo_exists() and current_tab["name"] == "logs":
+                try:
+                    logs_text.configure(state=tk.NORMAL)
+                    logs_text.delete("1.0", tk.END)
+                    for log_entry in IN_MEMORY_LOGS:
+                        logs_text.insert(tk.END, log_entry + "\n")
+                    logs_text.configure(state=tk.DISABLED)
+                    logs_text.see(tk.END)
+                    self.debug_panel.after(2000, refresh_logs)
+                except:
+                    pass
+        
+        self.debug_panel.after(2000, refresh_logs)
+    
     def on_closing(self):
         logging.info("Shutting down Multi-Client Viewer")
+        # Save position one final time before closing
+        self._save_window_position()
         self.running = False
         time.sleep(0.5)
         self.root.quit()
