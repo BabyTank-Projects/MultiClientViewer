@@ -5,7 +5,7 @@ A powerful multi-window monitoring and management tool designed for efficiently 
 ## ✨ Key Features
 
 ### 🪟 Advanced Window Management
-- **Live Thumbnails**: Real-time capture and display of any window on your system
+- **Window Thumbnails**: Real-time capture and display of active windows; minimized windows show a snapshot from their last active state
 - **Grid Layout**: Organize windows in a customizable 3-5 column grid that auto-scales to your screen
 - **Click to Expand**: Instantly bring any window to focus with a single click
 - **Smart Auto-Minimize**: Automatically minimize expanded windows when you switch focus
@@ -57,8 +57,8 @@ Head to the [Releases](../../releases) page to download the latest version of `M
 4. Click on thumbnails to expand and focus windows
 
 ### Understanding the Interface
-- **Green Dot (●)**: Window is minimized (efficient mode)
-- **Red Dot (●)**: Window is active/restored (higher resource usage)
+- **Green Dot (●)**: Window is minimized (shows last captured snapshot)
+- **Red Dot (●)**: Window is active/restored (live updating thumbnail)
 - **CPU %**: Real-time CPU usage for each window
 - **↑/↓ Buttons**: Reorder windows in your grid
 - **✕ Remove**: Stop monitoring a window
@@ -87,6 +87,7 @@ Access the ⚙️ Settings menu to customize:
 - Utilizes Windows GDI+ for high-quality window captures
 - Automatically handles window decorations and client areas
 - Supports windows in any state (minimized, hidden, background)
+- Active windows update in real-time; minimized windows display their last captured state
 
 ## 🐛 Troubleshooting
 
