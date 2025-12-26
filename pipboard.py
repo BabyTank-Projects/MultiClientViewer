@@ -31,27 +31,33 @@ import subprocess
 import tempfile
 
 import webbrowser
+import io
+
+# Store version and logs in memory instead of files
+IN_MEMORY_VERSION = None
+IN_MEMORY_LOGS = []
+MAX_LOG_ENTRIES = 1000
+
+class MemoryLogHandler(logging.Handler):
+    """Custom log handler that stores logs in memory"""
+    def emit(self, record):
+        global IN_MEMORY_LOGS
+        log_entry = self.format(record)
+        IN_MEMORY_LOGS.append(log_entry)
+        if len(IN_MEMORY_LOGS) > MAX_LOG_ENTRIES:
+            IN_MEMORY_LOGS.pop(0)
 
 GITHUB_REPO = "BabyTank-Projects/MultiClientViewer"
-VERSION_FILE = "version.txt"
 
 def get_current_version():
-    """Get current version from version.txt file"""
-    try:
-        if os.path.exists(VERSION_FILE):
-            with open(VERSION_FILE, 'r') as f:
-                return f.read().strip()
-        return None
-    except:
-        return None
+    """Get current version from memory"""
+    global IN_MEMORY_VERSION
+    return IN_MEMORY_VERSION
 
 def save_current_version(version):
-    """Save version to version.txt file"""
-    try:
-        with open(VERSION_FILE, 'w') as f:
-            f.write(version)
-    except:
-        pass
+    """Save version to memory"""
+    global IN_MEMORY_VERSION
+    IN_MEMORY_VERSION = version
 
 def compare_versions(current, latest):
     """Compare version strings (e.g., '1.0.6' vs '1.0.7')"""
@@ -137,28 +143,23 @@ def check_updates_on_startup():
     thread.start()
 
 def setup_logging():
-    """Setup logging with fallback if file is locked"""
+    """Setup logging to memory instead of file"""
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
     logger.handlers = []
     
-    try:
-        handler = RotatingFileHandler(
-            'pipboard.log',
-            maxBytes=5*1024*1024,
-            backupCount=3,
-            encoding='utf-8'
-        )
-        handler.setLevel(logging.DEBUG)
-        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-    except PermissionError:
-        console = logging.StreamHandler(sys.stdout)
-        console.setLevel(logging.INFO)
-        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-        console.setFormatter(formatter)
-        logger.addHandler(console)
+    # Add memory handler
+    memory_handler = MemoryLogHandler()
+    memory_handler.setLevel(logging.DEBUG)
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    memory_handler.setFormatter(formatter)
+    logger.addHandler(memory_handler)
+    
+    # Also add console handler as fallback
+    console = logging.StreamHandler(sys.stdout)
+    console.setLevel(logging.INFO)
+    console.setFormatter(formatter)
+    logger.addHandler(console)
     
     return logger
 
@@ -346,6 +347,10 @@ class PiPBoard:
         self.client_lock = threading.Lock()
         self.expanded_lock = threading.Lock()
         
+        # Debug panel state
+        self.debug_panel_visible = False
+        self.debug_panel = None
+        
         self.setup_modern_ui()
         
         self.capture_thread = threading.Thread(target=self.capture_loop, daemon=True)
@@ -365,28 +370,8 @@ class PiPBoard:
     def setup_modern_ui(self):
         self.root.configure(bg=self.bg_dark)
         
-        # Create notebook (tab container)
-        style = ttk.Style()
-        style.theme_use('default')
-        style.configure('TNotebook', background=self.bg_dark, borderwidth=0)
-        style.configure('TNotebook.Tab', background=self.card_bg_dark, foreground='white', 
-                       padding=[20, 10], font=('Segoe UI', 10, 'bold'))
-        style.map('TNotebook.Tab', background=[('selected', self.accent_color)], 
-                 foreground=[('selected', 'white')])
-        
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill=tk.BOTH, expand=True)
-        
-        # Main tab (clients view)
-        main_tab = tk.Frame(self.notebook, bg=self.bg_dark)
-        self.notebook.add(main_tab, text='  Clients  ')
-        
-        # Settings tab
-        settings_tab = tk.Frame(self.notebook, bg=self.bg_dark)
-        self.notebook.add(settings_tab, text='  Settings  ')
-        
-        # === MAIN TAB CONTENT ===
-        header = tk.Frame(main_tab, bg=self.bg_dark, height=80)
+        # === MAIN CONTENT (no tabs) ===
+        header = tk.Frame(self.root, bg=self.bg_dark, height=80)
         header.pack(side=tk.TOP, fill=tk.X)
         header.pack_propagate(False)
         
@@ -415,6 +400,19 @@ class PiPBoard:
         self.auto_toggle = self.create_toggle_button(controls, "⚡ Auto-Minimize", self.auto_minimize_var, None)
         self.auto_toggle.pack(side=tk.LEFT, padx=8)
         
+        # Utility buttons
+        utility_frame = tk.Frame(controls, bg=self.bg_dark)
+        utility_frame.pack(side=tk.LEFT, padx=15)
+        
+        updates_btn = ModernButton(utility_frame, "🔄 Updates", lambda: check_for_updates(show_no_update_message=True), bg="#666666", hover_bg="#555555", width=120)
+        updates_btn.pack(side=tk.LEFT, padx=3)
+        
+        help_btn = ModernButton(utility_frame, "❓ Help", self.show_help_dialog, bg="#666666", hover_bg="#555555", width=100)
+        help_btn.pack(side=tk.LEFT, padx=3)
+        
+        debug_btn = ModernButton(utility_frame, "🐛 Debug", self.toggle_debug_panel, bg="#444444", hover_bg="#333333", width=110)
+        debug_btn.pack(side=tk.LEFT, padx=3)
+        
         status_frame = tk.Frame(controls, bg=self.bg_dark)
         status_frame.pack(side=tk.LEFT, padx=15)
         
@@ -431,7 +429,7 @@ class PiPBoard:
         )
         self.status_label.pack(side=tk.LEFT)
         
-        content = tk.Frame(main_tab, bg=self.bg_dark)
+        content = tk.Frame(self.root, bg=self.bg_dark)
         content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
         
         self.canvas = tk.Canvas(content, bg=self.bg_dark, highlightthickness=0)
@@ -450,82 +448,34 @@ class PiPBoard:
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        # === SETTINGS TAB CONTENT ===
-        self.setup_settings_tab(settings_tab)
-    
-        # === SETTINGS TAB CONTENT ===
-        self.setup_settings_tab(settings_tab)
-    
-    def setup_settings_tab(self, parent):
-        """Setup the settings tab with version info and help"""
-        # Main container with padding
-        container = tk.Frame(parent, bg=self.bg_dark)
-        container.pack(fill=tk.BOTH, expand=True, padx=40, pady=40)
+        # Debug panel (hidden by default)
+        self.debug_panel = None
+        self.debug_panel_visible = False
         
-        # Title
-        title = tk.Label(
-            container,
-            text="Settings & Information",
-            font=("Segoe UI", 28, "bold"),
+    
+    def show_help_dialog(self):
+        """Show help dialog with features and tips"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Help & Features")
+        dialog.geometry("700x600")
+        dialog.configure(bg=self.bg_dark)
+        dialog.transient(self.root)
+        
+        header = tk.Label(
+            dialog,
+            text="❓ Help & Features",
+            font=("Segoe UI", 20, "bold"),
             fg="white",
             bg=self.bg_dark
         )
-        title.pack(anchor="w", pady=(0, 30))
-        
-        # Version section
-        version_card = tk.Frame(container, bg=self.card_bg_dark)
-        version_card.pack(fill=tk.X, pady=(0, 20))
-        
-        version_header = tk.Label(
-            version_card,
-            text="🔄 Version & Updates",
-            font=("Segoe UI", 16, "bold"),
-            fg="white",
-            bg=self.card_bg_dark
-        )
-        version_header.pack(anchor="w", padx=30, pady=(20, 10))
-        
-        current_ver = get_current_version()
-        version_text = current_ver if current_ver else "Unknown"
-        
-        version_info = tk.Label(
-            version_card,
-            text=f"Current Version: {version_text}",
-            font=("Segoe UI", 12),
-            fg="#cccccc",
-            bg=self.card_bg_dark
-        )
-        version_info.pack(anchor="w", padx=30, pady=(0, 15))
-        
-        update_btn_frame = tk.Frame(version_card, bg=self.card_bg_dark)
-        update_btn_frame.pack(anchor="w", padx=30, pady=(0, 20))
-        
-        ModernButton(
-            update_btn_frame,
-            "Check for Updates",
-            lambda: check_for_updates(show_no_update_message=True),
-            width=200
-        ).pack(side=tk.LEFT)
-        
-        # Help section
-        help_card = tk.Frame(container, bg=self.card_bg_dark)
-        help_card.pack(fill=tk.BOTH, expand=True)
-        
-        help_header = tk.Label(
-            help_card,
-            text="❓ Help & Features",
-            font=("Segoe UI", 16, "bold"),
-            fg="white",
-            bg=self.card_bg_dark
-        )
-        help_header.pack(anchor="w", padx=30, pady=(20, 10))
+        header.pack(pady=(20, 10), padx=20)
         
         # Scrollable help content
-        help_scroll_frame = tk.Frame(help_card, bg=self.card_bg_dark)
-        help_scroll_frame.pack(fill=tk.BOTH, expand=True, padx=30, pady=(0, 20))
+        help_frame = tk.Frame(dialog, bg=self.card_bg_dark)
+        help_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
         
-        help_canvas = tk.Canvas(help_scroll_frame, bg=self.card_bg_dark, highlightthickness=0)
-        help_scrollbar = tk.Scrollbar(help_scroll_frame, orient="vertical", command=help_canvas.yview)
+        help_canvas = tk.Canvas(help_frame, bg=self.card_bg_dark, highlightthickness=0)
+        help_scrollbar = tk.Scrollbar(help_frame, orient="vertical", command=help_canvas.yview)
         help_scrollable = tk.Frame(help_canvas, bg=self.card_bg_dark)
         
         help_scrollable.bind(
@@ -540,19 +490,12 @@ class PiPBoard:
         def _on_mousewheel(event):
             help_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
         
-        def _bind_mousewheel(event):
-            help_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        help_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        dialog.bind("<Destroy>", lambda e: help_canvas.unbind_all("<MouseWheel>"))
         
-        def _unbind_mousewheel(event):
-            help_canvas.unbind_all("<MouseWheel>")
+        help_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=15, pady=15)
+        help_scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=15, padx=(0, 15))
         
-        help_canvas.bind("<Enter>", _bind_mousewheel)
-        help_canvas.bind("<Leave>", _unbind_mousewheel)
-        
-        help_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        help_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        # Help content
         help_sections = [
             ("🪟 Adding Windows", 
              "Click '＋ Add Window' to select any open window to monitor. The window will appear as a live thumbnail that updates automatically."),
@@ -581,7 +524,7 @@ class PiPBoard:
         
         for i, (section_title, description) in enumerate(help_sections):
             section_frame = tk.Frame(help_scrollable, bg=self.card_bg_dark)
-            section_frame.pack(fill=tk.X, pady=8)
+            section_frame.pack(fill=tk.X, pady=8, padx=15)
             
             title_label = tk.Label(
                 section_frame,
@@ -602,13 +545,218 @@ class PiPBoard:
                 bg=self.card_bg_dark,
                 anchor="w",
                 justify=tk.LEFT,
-                wraplength=800
+                wraplength=600
             )
             desc_label.pack(fill=tk.X, padx=(15, 0))
             
             if i < len(help_sections) - 1:
                 separator = tk.Frame(help_scrollable, bg="#444444", height=1)
-                separator.pack(fill=tk.X, pady=10)
+                separator.pack(fill=tk.X, pady=10, padx=15)
+        
+        # Close button
+        btn_frame = tk.Frame(dialog, bg=self.bg_dark)
+        btn_frame.pack(pady=(0, 20))
+        ModernButton(btn_frame, "Close", dialog.destroy, width=120).pack()
+    
+    def toggle_debug_panel(self):
+        """Toggle the debug panel visibility"""
+        if self.debug_panel_visible:
+            if self.debug_panel:
+                self.debug_panel.destroy()
+                self.debug_panel = None
+            self.debug_panel_visible = False
+        else:
+            self.show_debug_panel()
+            self.debug_panel_visible = True
+    
+    def show_debug_panel(self):
+        """Show the debug panel overlay"""
+        # Create overlay panel in bottom-right
+        self.debug_panel = tk.Toplevel(self.root)
+        self.debug_panel.title("Debug Panel")
+        self.debug_panel.geometry("600x400")
+        self.debug_panel.configure(bg=self.bg_dark)
+        
+        # Position in bottom-right
+        self.debug_panel.update_idletasks()
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        x = screen_width - 620
+        y = screen_height - 450
+        self.debug_panel.geometry(f"600x400+{x}+{y}")
+        
+        # Keep on top
+        self.debug_panel.attributes('-topmost', True)
+        
+        # Handle close
+        def on_close():
+            self.debug_panel_visible = False
+            self.debug_panel.destroy()
+            self.debug_panel = None
+        
+        self.debug_panel.protocol("WM_DELETE_WINDOW", on_close)
+        
+        # Header
+        header = tk.Frame(self.debug_panel, bg=self.card_bg_dark, height=50)
+        header.pack(fill=tk.X)
+        header.pack_propagate(False)
+        
+        title_label = tk.Label(
+            header,
+            text="🐛 Debug Panel",
+            font=("Segoe UI", 14, "bold"),
+            fg="white",
+            bg=self.card_bg_dark
+        )
+        title_label.pack(side=tk.LEFT, padx=20, pady=10)
+        
+        close_btn = tk.Label(
+            header,
+            text="✕",
+            font=("Segoe UI", 16),
+            fg="#ff4444",
+            bg=self.card_bg_dark,
+            cursor="hand2"
+        )
+        close_btn.pack(side=tk.RIGHT, padx=20)
+        close_btn.bind("<Button-1>", lambda e: on_close())
+        
+        # Tab system
+        tab_frame = tk.Frame(self.debug_panel, bg=self.bg_dark)
+        tab_frame.pack(fill=tk.X)
+        
+        content_frame = tk.Frame(self.debug_panel, bg=self.bg_dark)
+        content_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Tabs
+        logs_content = tk.Frame(content_frame, bg=self.bg_dark)
+        version_content = tk.Frame(content_frame, bg=self.bg_dark)
+        
+        current_tab = {"name": "logs"}
+        
+        def show_tab(tab_name):
+            logs_content.pack_forget()
+            version_content.pack_forget()
+            
+            if tab_name == "logs":
+                logs_content.pack(fill=tk.BOTH, expand=True)
+                logs_btn.configure(bg=self.accent_color)
+                version_btn.configure(bg=self.card_bg_dark)
+            else:
+                version_content.pack(fill=tk.BOTH, expand=True)
+                version_btn.configure(bg=self.accent_color)
+                logs_btn.configure(bg=self.card_bg_dark)
+            
+            current_tab["name"] = tab_name
+        
+        logs_btn = tk.Label(
+            tab_frame,
+            text="📋 Logs",
+            font=("Segoe UI", 10, "bold"),
+            fg="white",
+            bg=self.accent_color,
+            cursor="hand2",
+            padx=20,
+            pady=10
+        )
+        logs_btn.pack(side=tk.LEFT)
+        logs_btn.bind("<Button-1>", lambda e: show_tab("logs"))
+        
+        version_btn = tk.Label(
+            tab_frame,
+            text="ℹ️ Version",
+            font=("Segoe UI", 10, "bold"),
+            fg="white",
+            bg=self.card_bg_dark,
+            cursor="hand2",
+            padx=20,
+            pady=10
+        )
+        version_btn.pack(side=tk.LEFT)
+        version_btn.bind("<Button-1>", lambda e: show_tab("version"))
+        
+        # Logs tab content
+        logs_scroll_frame = tk.Frame(logs_content, bg=self.card_bg_dark)
+        logs_scroll_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
+        logs_text = tk.Text(
+            logs_scroll_frame,
+            bg=self.card_bg_dark,
+            fg="#cccccc",
+            font=("Consolas", 9),
+            wrap=tk.WORD,
+            relief="flat",
+            padx=10,
+            pady=10
+        )
+        logs_scrollbar = tk.Scrollbar(logs_scroll_frame, command=logs_text.yview)
+        logs_text.configure(yscrollcommand=logs_scrollbar.set)
+        
+        logs_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        logs_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Load logs from memory
+        global IN_MEMORY_LOGS
+        for log_entry in IN_MEMORY_LOGS:
+            logs_text.insert(tk.END, log_entry + "\n")
+        
+        logs_text.configure(state=tk.DISABLED)
+        logs_text.see(tk.END)
+        
+        # Version tab content
+        version_info_frame = tk.Frame(version_content, bg=self.card_bg_dark)
+        version_info_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
+        current_ver = get_current_version()
+        version_text = current_ver if current_ver else "Unknown"
+        
+        version_label = tk.Label(
+            version_info_frame,
+            text=f"Current Version: {version_text}",
+            font=("Segoe UI", 14, "bold"),
+            fg="white",
+            bg=self.card_bg_dark
+        )
+        version_label.pack(pady=(20, 10))
+        
+        repo_label = tk.Label(
+            version_info_frame,
+            text=f"Repository: {GITHUB_REPO}",
+            font=("Segoe UI", 10),
+            fg="#aaaaaa",
+            bg=self.card_bg_dark
+        )
+        repo_label.pack(pady=5)
+        
+        # Check for updates button
+        update_btn_frame = tk.Frame(version_info_frame, bg=self.card_bg_dark)
+        update_btn_frame.pack(pady=20)
+        
+        ModernButton(
+            update_btn_frame,
+            "Check for Updates",
+            lambda: check_for_updates(show_no_update_message=True),
+            width=200
+        ).pack()
+        
+        # Show logs tab by default
+        show_tab("logs")
+        
+        # Auto-refresh logs every 2 seconds
+        def refresh_logs():
+            if self.debug_panel and self.debug_panel.winfo_exists() and current_tab["name"] == "logs":
+                try:
+                    logs_text.configure(state=tk.NORMAL)
+                    logs_text.delete("1.0", tk.END)
+                    for log_entry in IN_MEMORY_LOGS:
+                        logs_text.insert(tk.END, log_entry + "\n")
+                    logs_text.configure(state=tk.DISABLED)
+                    logs_text.see(tk.END)
+                    self.debug_panel.after(2000, refresh_logs)
+                except:
+                    pass
+        
+        self.debug_panel.after(2000, refresh_logs)
     
     def create_toggle_button(self, parent, text, variable, command):
         return ModernToggle(parent, text, variable, command)
@@ -1152,4 +1300,4 @@ if __name__ == "__main__":
         logging.critical(f"Critical error: {e}")
         print(f"Error: {e}")
         import traceback
-        traceback.print_exc()
+        traceback.print_exc() 
