@@ -23,6 +23,31 @@ import queue
 import psutil
 import webbrowser
 import io
+import re
+
+# Store version and logs in memory instead of files
+IN_MEMORY_VERSION = None
+IN_MEMORY_LOGS = []
+MAX_LOG_ENTRIES = 1000
+
+def get_version_from_filename():
+    """Extract version from the executable filename"""
+    try:
+        if getattr(sys, 'frozen', False):
+            exe_path = sys.executable
+            filename = os.path.basename(exe_path)
+            
+            # Match patterns like: MultiClientViewer-v1.0.35.exe
+            match = re.search(r'v?(\d+\.\d+\.\d+)', filename)
+            if match:
+                version = 'v' + match.group(1)
+                logging.info(f"Detected version {version} from filename: {filename}")
+                return version
+        
+        return None
+    except Exception as e:
+        logging.error(f"Error reading version from filename: {e}")
+        return None
 
 # Store version and logs in memory instead of files
 IN_MEMORY_VERSION = None
@@ -51,8 +76,13 @@ class MemoryLogHandler(logging.Handler):
 GITHUB_REPO = "BabyTank-Projects/MultiClientViewer"
 
 def get_current_version():
-    """Get current version from memory"""
+    """Get current version from memory or filename"""
     global IN_MEMORY_VERSION
+    
+    if IN_MEMORY_VERSION is None:
+        # Try to get version from filename as fallback
+        IN_MEMORY_VERSION = get_version_from_filename()
+    
     return IN_MEMORY_VERSION
 
 def save_current_version(version):
