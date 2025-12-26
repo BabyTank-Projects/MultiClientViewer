@@ -122,7 +122,7 @@ def check_for_updates(show_no_update_message=False):
     result = messagebox.askyesno(
     "Update Available",
     f"A new version ({latest_version}) is available!\n\n"
-    "Current version: {current_version if current_version else 'Unknown'}\n\n"
+    f"Current version: {current_version if current_version else 'Unknown'}\n\n"
     "Click YES to download the update.\n"
     "Click NO if you've already updated (to mark as current version).",
     icon='info'
