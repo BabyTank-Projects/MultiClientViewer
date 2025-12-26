@@ -46,10 +46,65 @@ jobs:
       run: |
         pyinstaller pipboard.spec
     
-    - name: Rename executable with version
+    - name: List all files to find executable
+      run: |
+        echo "=== Current directory ==="
+        Get-Location
+        echo ""
+        echo "=== Contents of current directory ==="
+        Get-ChildItem
+        echo ""
+        echo "=== Contents of dist folder (if exists) ==="
+        if (Test-Path "dist") {
+          Get-ChildItem -Path dist -Recurse | Format-Table Name, FullName
+        } else {
+          echo "dist folder not found in current directory"
+        }
+      shell: pwsh
+    
+    - name: Find and rename executable
       run: |
         $version = "${{ steps.get_version.outputs.VERSION }}"
-        Move-Item "dist/pipboard.exe" "dist/MultiClientViewer-$version.exe"
+        
+        # Try to find pipboard.exe in various locations
+        $possiblePaths = @(
+          "dist/pipboard.exe",
+          "dist/pipboard/pipboard.exe",
+          "./pipboard.exe"
+        )
+        
+        $foundPath = $null
+        foreach ($path in $possiblePaths) {
+          if (Test-Path $path) {
+            $foundPath = $path
+            echo "Found executable at: $path"
+            break
+          }
+        }
+        
+        if ($foundPath) {
+          $targetPath = "dist/MultiClientViewer-$version.exe"
+          
+          # Ensure dist folder exists
+          if (-not (Test-Path "dist")) {
+            New-Item -ItemType Directory -Path "dist"
+          }
+          
+          Copy-Item $foundPath $targetPath
+          echo "Successfully created MultiClientViewer-$version.exe"
+          
+          # Verify the file exists
+          if (Test-Path $targetPath) {
+            echo "Verified: $targetPath exists"
+            $fileInfo = Get-Item $targetPath
+            echo "File size: $($fileInfo.Length) bytes"
+          }
+        } else {
+          echo "Error: Could not find pipboard.exe in any expected location!"
+          echo "Searched paths:"
+          $possiblePaths | ForEach-Object { echo "  - $_" }
+          exit 1
+        }
       shell: pwsh
     
     - name: Upload artifact
