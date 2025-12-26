@@ -120,27 +120,35 @@ def check_for_updates(show_no_update_message=False):
         return
     
     result = messagebox.askyesno(
-        "Update Available",
-        f"A new version ({latest_version}) is available!\n\n"
-        "Would you like to visit the GitHub release page to download it?",
-        icon='info'
+    "Update Available",
+    f"A new version ({latest_version}) is available!\n\n"
+    "Current version: {current_version if current_version else 'Unknown'}\n\n"
+    "Click YES to download the update.\n"
+    "Click NO if you've already updated (to mark as current version).",
+    icon='info'
+)
+
+if result:
+    # User wants to download
+    webbrowser.open(release_url)
+else:
+    # User says they already updated - mark current version as latest
+    user_response = messagebox.askyesno(
+        "Version Update",
+        f"Have you already updated to version {latest_version}?",
+        icon='question'
     )
-    
-    if result:
-        webbrowser.open(release_url)
+    if user_response:
         save_current_version(latest_version)
+else:
+    # User clicked "No" - they're staying on current version
+    # Ask what version they're on
+    pass
 
 def check_updates_on_startup():
     """Check for updates in background thread on startup"""
     def bg_check():
-        if not get_current_version():
-            release_info = get_latest_release()
-            if release_info:
-                latest_version = release_info.get('tag_name', '').lstrip('v')
-                if latest_version:
-                    save_current_version(latest_version)
-                    return
-        
+        # Don't auto-save version on startup - let user decide
         check_for_updates(show_no_update_message=False)
     
     thread = threading.Thread(target=bg_check, daemon=True)
