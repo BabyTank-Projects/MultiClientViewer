@@ -140,10 +140,6 @@ else:
     )
     if user_response:
         save_current_version(latest_version)
-else:
-    # User clicked "No" - they're staying on current version
-    # Ask what version they're on
-    pass
 
 def check_updates_on_startup():
     """Check for updates in background thread on startup"""
