@@ -44,65 +44,21 @@ jobs:
     
     - name: Build with PyInstaller
       run: |
-        pyinstaller pipboard.spec
-    
-    - name: List all files to find executable
-      run: |
-        echo "=== Current directory ==="
-        Get-Location
-        echo ""
-        echo "=== Contents of current directory ==="
-        Get-ChildItem
-        echo ""
-        echo "=== Contents of dist folder (if exists) ==="
-        if (Test-Path "dist") {
-          Get-ChildItem -Path dist -Recurse | Format-Table Name, FullName
-        } else {
-          echo "dist folder not found in current directory"
-        }
+        pyinstaller --clean --noconfirm pipboard.spec
       shell: pwsh
     
-    - name: Find and rename executable
+    - name: Rename executable with version
       run: |
         $version = "${{ steps.get_version.outputs.VERSION }}"
         
-        # Try to find pipboard.exe in various locations
-        $possiblePaths = @(
-          "dist/pipboard.exe",
-          "dist/pipboard/pipboard.exe",
-          "./pipboard.exe"
-        )
-        
-        $foundPath = $null
-        foreach ($path in $possiblePaths) {
-          if (Test-Path $path) {
-            $foundPath = $path
-            echo "Found executable at: $path"
-            break
-          }
-        }
-        
-        if ($foundPath) {
-          $targetPath = "dist/MultiClientViewer-$version.exe"
-          
-          # Ensure dist folder exists
-          if (-not (Test-Path "dist")) {
-            New-Item -ItemType Directory -Path "dist"
-          }
-          
-          Copy-Item $foundPath $targetPath
-          echo "Successfully created MultiClientViewer-$version.exe"
-          
-          # Verify the file exists
-          if (Test-Path $targetPath) {
-            echo "Verified: $targetPath exists"
-            $fileInfo = Get-Item $targetPath
-            echo "File size: $($fileInfo.Length) bytes"
-          }
+        # The exe is created as MultiClientViewer.exe (from the spec file)
+        if (Test-Path "dist/MultiClientViewer.exe") {
+          Move-Item "dist/MultiClientViewer.exe" "dist/MultiClientViewer-$version.exe"
+          echo "Successfully renamed to MultiClientViewer-$version.exe"
         } else {
-          echo "Error: Could not find pipboard.exe in any expected location!"
-          echo "Searched paths:"
-          $possiblePaths | ForEach-Object { echo "  - $_" }
+          echo "Error: dist/MultiClientViewer.exe not found!"
+          echo "Available files in dist:"
+          Get-ChildItem -Path dist
           exit 1
         }
       shell: pwsh
