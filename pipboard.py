@@ -1,5 +1,5 @@
 """
-Multi-Client Viewer - Baby Tank - Multi-Client Picture-in-Picture Viewer
+Multi-Client Viewer - Baby Tank - Multi-Client Picture-in-Picture
 """
 import tkinter as tk
 from tkinter import ttk, messagebox, colorchooser
