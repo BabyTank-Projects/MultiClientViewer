@@ -1,45 +1,71 @@
 name: Build Multi-Client Viewer
+
 on:
   push:
-    branches: [ main ]
-  workflow_dispatch:
-
-permissions:
-  contents: write
+    tags:
+      - 'v*'  # Triggers on version tags like v1.0.35
+  workflow_dispatch:  # Allows manual trigger
 
 jobs:
   build:
     runs-on: windows-latest
     
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v3
     
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v4
       with:
         python-version: '3.11'
     
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pyinstaller pillow pywin32 requests psutil
+        pip install -r requirements.txt
+        pip install pyinstaller
     
-    - name: Build executable using spec file
+    - name: Get version from tag
+      id: get_version
+      run: |
+        if ($env:GITHUB_REF -match 'refs/tags/(.*)') {
+          $version = $matches[1]
+        } else {
+          $version = "dev"
+        }
+        echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+        echo "Building version: $version"
+      shell: pwsh
+    
+    - name: Update version in code
+      run: |
+        $version = "${{ steps.get_version.outputs.VERSION }}"
+        $content = Get-Content pipboard.py -Raw
+        $content = $content -replace 'IN_MEMORY_VERSION = None', "IN_MEMORY_VERSION = '$version'"
+        Set-Content pipboard.py $content
+      shell: pwsh
+    
+    - name: Build with PyInstaller
       run: |
         pyinstaller pipboard.spec
     
-    - name: Upload executable
-      uses: actions/upload-artifact@v4
+    - name: Rename executable with version
+      run: |
+        $version = "${{ steps.get_version.outputs.VERSION }}"
+        Move-Item "dist/pipboard.exe" "dist/MultiClientViewer-$version.exe"
+      shell: pwsh
+    
+    - name: Upload artifact
+      uses: actions/upload-artifact@v3
       with:
-        name: MultiClientViewer
-        path: dist/MultiClientViewer.exe
+        name: MultiClientViewer-${{ steps.get_version.outputs.VERSION }}
+        path: dist/MultiClientViewer-${{ steps.get_version.outputs.VERSION }}.exe
     
     - name: Create Release
-      if: github.ref == 'refs/heads/main'
+      if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
-        tag_name: v1.0.${{ github.run_number }}
-        name: Release v1.0.${{ github.run_number }}
-        files: dist/MultiClientViewer.exe
+        files: dist/MultiClientViewer-${{ steps.get_version.outputs.VERSION }}.exe
         draft: false
         prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
