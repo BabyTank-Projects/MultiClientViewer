@@ -1,10 +1,6 @@
 """
-Multi-Client Viewer - Modern Multi-Client Picture-in-Picture Viewer
-FIXED VERSION v2 - Status light repositioned, light mode visibility fixed, 5 column max
-
-PART 1 OF 4
+Multi-Client Viewer - Baby Tank - Multi-Client Picture-in-Picture Viewer
 """
-
 import tkinter as tk
 from tkinter import ttk, messagebox, colorchooser
 from PIL import Image, ImageGrab, ImageTk, ImageDraw
@@ -736,20 +732,69 @@ class PiPBoard:
         content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
         
         self.canvas = tk.Canvas(content, bg=self.bg_color, highlightthickness=0)
-        scrollbar = tk.Scrollbar(content, orient="vertical", command=self.canvas.yview)
-        
+
         self.scrollable_frame = tk.Frame(self.canvas, bg=self.bg_color)
-        
+
         self.scrollable_frame.bind(
             "<Configure>",
             lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
         )
-        
+
         self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
-        self.canvas.configure(yscrollcommand=scrollbar.set)
-        
+
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Create scroll button container on the right
+        scroll_buttons = tk.Frame(content, bg=self.bg_color, width=50)
+        scroll_buttons.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Add vertical spacer to center the buttons
+        tk.Frame(scroll_buttons, bg=self.bg_color).pack(side=tk.TOP, expand=True)
+
+        # Up arrow button
+        up_arrow = tk.Label(
+            scroll_buttons,
+            text="▲",
+            font=("Segoe UI", 20),
+            fg=self.accent_color,
+            bg=self.bg_color,
+            cursor="hand2",
+            padx=10,
+            pady=5
+        )
+        up_arrow.pack(side=tk.TOP, pady=5)
+
+        def scroll_up(event=None):
+            self.canvas.yview_scroll(-3, "units")
+
+        up_arrow.bind("<Button-1>", scroll_up)
+
+        # Down arrow button
+        down_arrow = tk.Label(
+            scroll_buttons,
+            text="▼",
+            font=("Segoe UI", 20),
+            fg=self.accent_color,
+            bg=self.bg_color,
+            cursor="hand2",
+            padx=10,
+            pady=5
+        )
+        down_arrow.pack(side=tk.TOP, pady=5)
+
+        def scroll_down(event=None):
+            self.canvas.yview_scroll(3, "units")
+
+        down_arrow.bind("<Button-1>", scroll_down)
+
+        # Add vertical spacer to center the buttons
+        tk.Frame(scroll_buttons, bg=self.bg_color).pack(side=tk.TOP, expand=True)
+
+        # Add mouse wheel scrolling
+        def _on_mousewheel(event):
+            self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+
+        self.canvas.bind_all("<MouseWheel>", _on_mousewheel)
         
         self.debug_panel = None
         self.debug_panel_visible = False
@@ -961,6 +1006,9 @@ class PiPBoard:
             }
         
         logging.info(f"Added client: {title} (hwnd: {hwnd})")
+
+        # Scroll to top when adding new window
+        self.canvas.yview_moveto(0)
     
     def monitor_cpu_usage(self):
         """Monitor CPU usage for each window"""
