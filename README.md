@@ -20,7 +20,6 @@ A powerful multi-window monitoring and management tool designed for efficiently 
 - **Theme Support**: Choose between modern Dark and Light themes
 - **Accent Colors**: Personalize with custom accent colors
 - **Adaptive Sizing**: Thumbnail sizes automatically adjust based on your screen resolution and grid layout
-- **Window Position Memory**: Application remembers its position and size between sessions
 
 ### 🛠️ Additional Tools
 - **Debug Panel**: Access real-time logs and version information
