@@ -29,6 +29,7 @@ import json
 import os
 import subprocess
 import tempfile
+import queue
 
 import webbrowser
 import io
@@ -319,6 +320,8 @@ class ModernToggle(tk.Frame):
             x1, y1+radius,
             x1, y1
         ]
+        # CONTINUATION FROM PART 1
+# Last line from Part 1:
         return canvas.create_polygon(points, smooth=True, **kwargs)
 
 class PiPBoard:
@@ -347,11 +350,17 @@ class PiPBoard:
         self.client_lock = threading.Lock()
         self.expanded_lock = threading.Lock()
         
+        # UI update queue to prevent blocking
+        self.ui_queue = queue.Queue()
+        
         # Debug panel state
         self.debug_panel_visible = False
         self.debug_panel = None
         
         self.setup_modern_ui()
+        
+        # Start UI queue processor
+        self.process_ui_queue()
         
         self.capture_thread = threading.Thread(target=self.capture_loop, daemon=True)
         self.capture_thread.start()
@@ -366,6 +375,30 @@ class PiPBoard:
         check_updates_on_startup()
         
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+    
+    def process_ui_queue(self):
+        """Process UI updates from background threads safely"""
+        try:
+            while not self.ui_queue.empty():
+                try:
+                    func, args, kwargs = self.ui_queue.get_nowait()
+                    func(*args, **kwargs)
+                except queue.Empty:
+                    break
+                except Exception as e:
+                    logging.error(f"Error processing UI queue item: {e}")
+        except Exception as e:
+            logging.error(f"Error in process_ui_queue: {e}")
+        finally:
+            if self.running:
+                self.root.after(50, self.process_ui_queue)
+    
+    def queue_ui_update(self, func, *args, **kwargs):
+        """Queue a UI update to be executed on the main thread"""
+        try:
+            self.ui_queue.put((func, args, kwargs))
+        except Exception as e:
+            logging.error(f"Error queuing UI update: {e}")
         
     def setup_modern_ui(self):
         self.root.configure(bg=self.bg_dark)
@@ -758,6 +791,8 @@ class PiPBoard:
         
         self.debug_panel.after(2000, refresh_logs)
     
+    # CONTINUATION FROM PART 2
+# Last line from Part 2:
     def create_toggle_button(self, parent, text, variable, command):
         return ModernToggle(parent, text, variable, command)
         
@@ -811,11 +846,20 @@ class PiPBoard:
         return windows
     
     def add_window(self):
-        windows = self.get_window_list()
+        # Run window enumeration in background to prevent UI blocking
+        def get_windows_async():
+            windows = self.get_window_list()
+            
+            with self.client_lock:
+                available_windows = [(hwnd, title) for hwnd, title in windows if hwnd not in self.clients]
+            
+            self.queue_ui_update(self._show_window_dialog, available_windows)
         
-        with self.client_lock:
-            available_windows = [(hwnd, title) for hwnd, title in windows if hwnd not in self.clients]
-        
+        thread = threading.Thread(target=get_windows_async, daemon=True)
+        thread.start()
+    
+    def _show_window_dialog(self, available_windows):
+        """Show window selection dialog (called on UI thread)"""
         if not available_windows:
             messagebox.showinfo("No Windows", "No new capturable windows found!")
             return
@@ -948,7 +992,7 @@ class PiPBoard:
                                 old_state = self.clients[hwnd].get("is_minimized", False)
                                 if old_state != is_minimized:
                                     self.clients[hwnd]["is_minimized"] = is_minimized
-                                    self.root.after(0, self.update_client_status, hwnd, is_minimized)
+                                    self.queue_ui_update(self.update_client_status, hwnd, is_minimized)
                     except Exception as e:
                         logging.error(f"Error checking window state for {hwnd}: {e}")
                 
@@ -960,17 +1004,18 @@ class PiPBoard:
     
     def update_client_status(self, hwnd, is_minimized):
         """Update client status indicator - Green when minimized (low CPU), Red when active (high CPU)"""
-        with self.client_lock:
-            if hwnd in self.clients:
-                status_ind = self.clients[hwnd]["status_indicator"]
-        
-        # Green when minimized (low CPU usage), Red when active (high CPU usage)
-        color = "#00ff00" if is_minimized else "#ff4444"
         try:
+            with self.client_lock:
+                if hwnd not in self.clients:
+                    return
+                status_ind = self.clients[hwnd]["status_indicator"]
+            
+            # Green when minimized (low CPU usage), Red when active (high CPU usage)
+            color = "#00ff00" if is_minimized else "#ff4444"
             status_ind.delete("all")
             status_ind.create_oval(2, 2, 8, 8, fill=color, outline="")
-        except:
-            pass
+        except Exception as e:
+            logging.error(f"Error updating status for {hwnd}: {e}")
     
     def move_client(self, hwnd, direction):
         with self.client_lock:
@@ -1012,46 +1057,51 @@ class PiPBoard:
         logging.info(f"Removed client hwnd: {hwnd}")
     
     def expand_pip(self, hwnd):
-        if not win32gui.IsWindow(hwnd):
-            messagebox.showerror("Error", "Window no longer exists!")
-            return
+        # Run window operations in background thread to prevent UI blocking
+        def expand_async():
+            if not win32gui.IsWindow(hwnd):
+                self.queue_ui_update(messagebox.showerror, "Error", "Window no longer exists!")
+                return
+            
+            try:
+                with self.client_lock:
+                    if hwnd not in self.clients:
+                        return
+                    window_title = self.clients[hwnd]["title"]
+                
+                is_dreambot = "DreamBot" in window_title
+                
+                with self.expanded_lock:
+                    self.expanded_windows.add(hwnd)
+                    if is_dreambot:
+                        self.paused_clients.add(hwnd)
+                
+                if win32gui.IsIconic(hwnd):
+                    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                    time.sleep(0.3)
+                
+                for attempt in range(3):
+                    try:
+                        win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+                        win32gui.BringWindowToTop(hwnd)
+                        win32gui.SetForegroundWindow(hwnd)
+                        
+                        time.sleep(0.15)
+                        if win32gui.GetForegroundWindow() == hwnd:
+                            break
+                    except Exception as e:
+                        if attempt == 2:
+                            raise
+                        time.sleep(0.2)
+                
+            except Exception as e:
+                logging.error(f"Error bringing window to front: {e}")
+                with self.expanded_lock:
+                    self.paused_clients.discard(hwnd)
+                    self.expanded_windows.discard(hwnd)
         
-        try:
-            with self.client_lock:
-                if hwnd not in self.clients:
-                    return
-                window_title = self.clients[hwnd]["title"]
-            
-            is_dreambot = "DreamBot" in window_title
-            
-            with self.expanded_lock:
-                self.expanded_windows.add(hwnd)
-                if is_dreambot:
-                    self.paused_clients.add(hwnd)
-            
-            if win32gui.IsIconic(hwnd):
-                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-                time.sleep(0.3)
-            
-            for attempt in range(3):
-                try:
-                    win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
-                    win32gui.BringWindowToTop(hwnd)
-                    win32gui.SetForegroundWindow(hwnd)
-                    
-                    time.sleep(0.15)
-                    if win32gui.GetForegroundWindow() == hwnd:
-                        break
-                except Exception as e:
-                    if attempt == 2:
-                        raise
-                    time.sleep(0.2)
-            
-        except Exception as e:
-            logging.error(f"Error bringing window to front: {e}")
-            with self.expanded_lock:
-                self.paused_clients.discard(hwnd)
-                self.expanded_windows.discard(hwnd)
+        thread = threading.Thread(target=expand_async, daemon=True)
+        thread.start()
     
     def monitor_expanded_windows(self):
         last_foreground = None
@@ -1223,7 +1273,7 @@ class PiPBoard:
                                 continue
                         
                         if not win32gui.IsWindow(hwnd):
-                            self.root.after(0, self.remove_client, hwnd)
+                            self.queue_ui_update(self.remove_client, hwnd)
                             continue
                         
                         with self.client_lock:
@@ -1245,7 +1295,7 @@ class PiPBoard:
                                         if hwnd in self.clients:
                                             self.clients[hwnd]["photo"] = photo
                                             self.clients[hwnd]["last_update"] = current_time
-                                    self.root.after(0, self.update_client_image, hwnd, photo)
+                                    self.queue_ui_update(self.update_client_image, hwnd, photo)
                                 except Exception as e:
                                     logging.error(f"Error creating PhotoImage: {e}")
                     
@@ -1259,14 +1309,16 @@ class PiPBoard:
                 time.sleep(0.1)
     
     def update_client_image(self, hwnd, photo):
-        with self.client_lock:
-            if hwnd in self.clients:
-                try:
-                    label = self.clients[hwnd]["label"]
-                    label.configure(image=photo)
-                    label.image = photo
-                except Exception as e:
-                    logging.error(f"Error updating image for {hwnd}: {e}")
+        try:
+            with self.client_lock:
+                if hwnd not in self.clients:
+                    return
+                label = self.clients[hwnd]["label"]
+            
+            label.configure(image=photo)
+            label.image = photo
+        except Exception as e:
+            logging.error(f"Error updating image for {hwnd}: {e}")
     
     def toggle_movie_mode(self):
         self.movie_mode = self.movie_mode_var.get()
@@ -1300,4 +1352,4 @@ if __name__ == "__main__":
         logging.critical(f"Critical error: {e}")
         print(f"Error: {e}")
         import traceback
-        traceback.print_exc() 
+        traceback.print_exc()
