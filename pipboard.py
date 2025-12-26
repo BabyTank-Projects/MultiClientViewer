@@ -119,27 +119,28 @@ def check_for_updates(show_no_update_message=False):
             messagebox.showinfo("No Update", f"You're already on the latest version ({current_version})!")
         return
     
+    # Show update available dialog
     result = messagebox.askyesno(
-    "Update Available",
-    f"A new version ({latest_version}) is available!\n\n"
-    f"Current version: {current_version if current_version else 'Unknown'}\n\n"
-    "Click YES to download the update.\n"
-    "Click NO if you've already updated (to mark as current version).",
-    icon='info'
-)
-
-if result:
-    # User wants to download
-    webbrowser.open(release_url)
-else:
-    # User says they already updated - mark current version as latest
-    user_response = messagebox.askyesno(
-        "Version Update",
-        f"Have you already updated to version {latest_version}?",
-        icon='question'
+        "Update Available",
+        f"A new version ({latest_version}) is available!\n\n"
+        f"Current version: {current_version if current_version else 'Unknown'}\n\n"
+        "Click YES to download the update.\n"
+        "Click NO if you've already updated (to mark as current version).",
+        icon='info'
     )
-    if user_response:
-        save_current_version(latest_version)
+
+    if result:
+        # User wants to download
+        webbrowser.open(release_url)
+    else:
+        # User clicked No - ask if they already updated
+        user_response = messagebox.askyesno(
+            "Version Update",
+            f"Have you already updated to version {latest_version}?",
+            icon='question'
+        )
+        if user_response:
+            save_current_version(latest_version)
 
 def check_updates_on_startup():
     """Check for updates in background thread on startup"""
