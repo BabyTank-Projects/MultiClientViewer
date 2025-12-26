@@ -1,5 +1,5 @@
 """
-Multi-Client Viewer - Baby Tank - Multi-Client Picture-in-Picture
+Multi-Client Viewer - Baby Tank - Multi-Client Picture-in-Picture Viewer
 """
 import tkinter as tk
 from tkinter import ttk, messagebox, colorchooser
@@ -41,12 +41,14 @@ def get_version_from_filename():
             match = re.search(r'v?(\d+\.\d+\.\d+)', filename)
             if match:
                 version = 'v' + match.group(1)
-                logging.info(f"Detected version {version} from filename: {filename}")
+                # Use print instead of logging if logger isn't ready
+                print(f"Detected version {version} from filename: {filename}")
                 return version
         
         return None
     except Exception as e:
-        logging.error(f"Error reading version from filename: {e}")
+        # Use print instead of logging if logger isn't ready
+        print(f"Error reading version from filename: {e}")
         return None
 
 # Store version and logs in memory instead of files
